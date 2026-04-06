@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.js
+*.d.ts
+*.js.map
+!jest.config.js
+!eslint.config.js
+
+# Test output
+coverage/
+*.log
+
+# Generated test files
+large-test.json
+large-test.odin
+test-output.odin
+*.roundtrip.json
+
+# Generated schema-api tests (regenerate with: npm run generate:schemas)
+tests/schema-api/
+
+# Debug and scratch
+debug-output/
+scripts/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# npm
+.npm
+*.tgz
+
+# Environment
+.env
+.env.local
