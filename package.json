@@ -1,6 +1,6 @@
 {
   "name": "@odin-foundation/core",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Official TypeScript implementation of ODIN (Open Data Interchange Notation)",
   "type": "module",
   "main": "dist/cjs/index.cjs",
