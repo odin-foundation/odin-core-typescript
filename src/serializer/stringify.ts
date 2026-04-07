@@ -594,6 +594,23 @@ function tryOutputAsTabular(
     }
   }
 
+  // Reject tabular if any indexed sub-array column (`field[N]`) is sparse —
+  // padding shorter rows with empty cells loses to the nested record-block form.
+  for (const col of allColumns) {
+    if (col.charCodeAt(col.length - 1) !== 93 /* ']' */) continue;
+    const openIdx = col.lastIndexOf('[');
+    if (openIdx <= 0) continue;
+    let allDigits = true;
+    for (let i = openIdx + 1; i < col.length - 1; i++) {
+      const c = col.charCodeAt(i);
+      if (c < 48 || c > 57) { allDigits = false; break; }
+    }
+    if (!allDigits) continue;
+    for (const fields of items.values()) {
+      if (!fields.has(col)) return false;
+    }
+  }
+
   const columns = Array.from(allColumns);
   if (opts.sortPaths) {
     columns.sort(sortTabularColumns);
