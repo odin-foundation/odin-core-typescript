@@ -536,11 +536,32 @@ class TransformParser {
     const directiveName = name.slice(1).split('.')[0]!;
 
     switch (directiveName) {
+      case 'if':
+      case 'elif': {
+        // Conditions are verb expressions; legacy quoted-infix strings still parse.
+        const value = this.doc.get(fullPath);
+        const directive: SegmentDirective = { type: directiveName, value: '' };
+        if (value) {
+          if (value.type === 'verb') {
+            directive.expr = this.odinVerbToValueExpression(value);
+          } else if (value.type === 'string') {
+            if (value.value.trimStart().startsWith('%')) {
+              directive.expr = parseValueExpression(value.value);
+            } else {
+              directive.value = value.value;
+            }
+          } else if (value.type === 'number') {
+            directive.value = String(value.value);
+          }
+        }
+        return directive;
+      }
+      case 'else':
+        return { type: 'else', value: '' };
       case 'type':
       case 'loop':
       case 'counter':
       case 'from':
-      case 'if':
       case 'literal': {
         // Get the directive value from the document
         const value = this.doc.get(fullPath);

@@ -13,6 +13,7 @@ import type {
   TransformWarning,
   TransformValue,
   TransformSegment,
+  SegmentDirective,
   FieldMapping,
   ValueExpression,
   VerbRegistry,
@@ -48,7 +49,7 @@ import {
   parseRecord,
   mergeSegmentOutput,
 } from './engine-multirecord.js';
-import { jsToTransformValue, transformValueToJs } from './engine-value-utils.js';
+import { jsToTransformValue, transformValueToJs, isTruthy } from './engine-value-utils.js';
 import { applyDirectives } from './engine-directives.js';
 import { applyConfidentialEnforcement } from './engine-confidential.js';
 
@@ -418,17 +419,27 @@ class TransformEngine {
     return context;
   }
 
+  // Evaluate a segment condition: a verb expression, or a legacy quoted-infix string.
+  private evaluateSegmentCondition(
+    directive: SegmentDirective,
+    context: TransformContext
+  ): boolean {
+    if (directive.expr) {
+      return isTruthy(this.evaluateExpression(directive.expr, context));
+    }
+    return evaluateCondition(directive.value, context, (path, ctx) =>
+      this.resolvePathValue(path, ctx)
+    );
+  }
+
   private processSegment(
     segment: TransformSegment,
     context: TransformContext,
     output: Record<string, unknown>
   ): void {
     const ifDirective = segment.directives.find((d) => d.type === 'if');
-    if (ifDirective && ifDirective.value) {
-      const conditionResult = evaluateCondition(ifDirective.value, context, (path, ctx) =>
-        this.resolvePathValue(path, ctx)
-      );
-      if (!conditionResult) {
+    if (ifDirective && (ifDirective.expr || ifDirective.value)) {
+      if (!this.evaluateSegmentCondition(ifDirective, context)) {
         return;
       }
     }

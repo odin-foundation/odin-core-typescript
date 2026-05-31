@@ -527,7 +527,7 @@ value = "@amount"
     });
   });
 
-  describe('Header-inline :if conditional', () => {
+  describe('Header-inline :if conditional (verb expression)', () => {
     const transformDoc = `
 {$}
 odin = "1.0.0"
@@ -537,36 +537,59 @@ direction = "json->json"
 {Quote}
 DriverName = "@driver.name"
 
-{DuiDetails :if "@driver.has_dui = true"}
-State = "@driver.dui.state"
+{HighRisk :if %and @driver.hasDui %lt @driver.age ##25}
+flag = "high-risk"
 `;
 
-    it('includes the section when the inline condition is true', () => {
-      const transform = parseTransform(transformDoc);
-      const result = executeTransform(transform, {
-        driver: { name: 'Pat', has_dui: true, dui: { state: 'TX' } },
+    it('includes the section when the verb condition is true', () => {
+      const result = executeTransform(parseTransform(transformDoc), {
+        driver: { name: 'Pat', hasDui: true, age: 22 },
       });
       const output = getValues(result) as Record<string, unknown>;
-      expect(output).toHaveProperty('DuiDetails');
-      expect((output['DuiDetails'] as Record<string, unknown>)?.State).toBe('TX');
+      expect(output).toHaveProperty('HighRisk');
     });
 
-    it('omits the section when the inline condition is false', () => {
-      const transform = parseTransform(transformDoc);
-      const result = executeTransform(transform, {
-        driver: { name: 'Sam', has_dui: false },
+    it('omits the section when the verb condition is false', () => {
+      const result = executeTransform(parseTransform(transformDoc), {
+        driver: { name: 'Sam', hasDui: true, age: 40 },
       });
       const output = getValues(result) as Record<string, unknown>;
       expect(output).toHaveProperty('Quote');
-      expect(output).not.toHaveProperty('DuiDetails');
+      expect(output).not.toHaveProperty('HighRisk');
     });
 
-    it('is equivalent to the body-line _if form', () => {
-      const transform = parseTransform(transformDoc);
-      const result = executeTransform(transform, {
-        driver: { name: 'Pat', has_dui: true, dui: { state: 'TX' } },
-      });
-      expect(result.success).toBe(true);
+    it('supports the body-line _if verb form', () => {
+      const t = `
+{$}
+direction = "json->json"
+
+{Dui}
+_if = %eq @driver.state "TX"
+state = "@driver.state"
+`;
+      const present = getValues(
+        executeTransform(parseTransform(t), { driver: { state: 'TX' } })
+      ) as Record<string, unknown>;
+      expect(present).toHaveProperty('Dui');
+      const absent = getValues(
+        executeTransform(parseTransform(t), { driver: { state: 'CA' } })
+      ) as Record<string, unknown>;
+      expect(absent).not.toHaveProperty('Dui');
+    });
+
+    it('still accepts a legacy quoted-infix body condition', () => {
+      const t = `
+{$}
+direction = "json->json"
+
+{Dui}
+_if = "@driver.has_dui = true"
+state = "@driver.state"
+`;
+      const present = getValues(
+        executeTransform(parseTransform(t), { driver: { has_dui: true, state: 'TX' } })
+      ) as Record<string, unknown>;
+      expect(present).toHaveProperty('Dui');
     });
   });
 

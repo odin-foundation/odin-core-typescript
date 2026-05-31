@@ -331,10 +331,9 @@ export class Parser {
         lookAheadToken?.type === TokenType.IDENTIFIER
           ? this.getTokenVal(lookAheadToken)
           : undefined;
-      const isInlineDirectiveName = directiveName === 'type' || directiveName === 'if';
-
-      let isInlineDirective = false;
-      if (isInlineDirectiveName) {
+      // :type takes a quoted discriminator value
+      let typeHasQuotedValue = false;
+      if (directiveName === 'type') {
         let lookAhead2 = lookAhead + 1;
         while (
           lookAhead2 < this.tokens.length &&
@@ -342,18 +341,49 @@ export class Parser {
         ) {
           lookAhead2++;
         }
-        isInlineDirective = this.tokens[lookAhead2]?.type === TokenType.STRING_QUOTED;
+        typeHasQuotedValue = this.tokens[lookAhead2]?.type === TokenType.STRING_QUOTED;
       }
 
-      if (isInlineDirective) {
+      // :type -> quoted value; :if/:elif -> unquoted expression up to }; :else -> bare flag
+      let handledInline = true;
+      if (directiveName === 'type' && typeHasQuotedValue) {
+        this.advance(); // consume :
+        this.skipWs();
+        this.advance(); // consume 'type'
+        this.skipWs();
+        const directiveValue = this.getTokenVal(this.peek());
+        this.advance();
+        this.state.pendingHeaderDirective = { key: '_type', value: directiveValue };
+      } else if (directiveName === 'if' || directiveName === 'elif') {
         this.advance(); // consume :
         this.skipWs();
         this.advance(); // consume directive name
         this.skipWs();
+        // Capture the raw expression text from here to the closing brace
+        const exprStart = this.peek().start;
+        let exprEnd = exprStart;
+        while (!this.isAtEnd() && this.peek().type !== TokenType.HEADER_CLOSE) {
+          if (this.peek().type !== TokenType.WHITESPACE) {
+            exprEnd = this.peek().end;
+          }
+          this.advance();
+        }
+        this.state.pendingHeaderDirective = {
+          key: `_${directiveName}`,
+          value: this.source.slice(exprStart, exprEnd),
+        };
+      } else if (directiveName === 'else') {
+        this.advance(); // consume :
+        this.skipWs();
+        this.advance(); // consume 'else'
+        this.skipWs();
+        this.state.pendingHeaderDirective = { key: '_else', value: 'true' };
+      } else {
+        handledInline = false;
+      }
 
-        const directiveValue = this.getTokenVal(this.peek());
-        this.advance();
-        this.state.pendingHeaderDirective = { key: `_${directiveName}`, value: directiveValue };
+      if (handledInline) {
+        // inline directive consumed; fall through to the closing-brace check
       } else if (pathStr.endsWith('[]')) {
         this.advance(); // consume :
         // Tabular mode - continue with existing logic (colon already consumed)

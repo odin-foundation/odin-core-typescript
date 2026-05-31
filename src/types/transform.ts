@@ -273,10 +273,13 @@ export interface TransformSegment {
  */
 export interface SegmentDirective {
   /** Directive type */
-  type: 'type' | 'loop' | 'counter' | 'from' | 'if' | 'literal';
+  type: 'type' | 'loop' | 'counter' | 'from' | 'if' | 'elif' | 'else' | 'literal';
 
   /** Directive value */
   value: string;
+
+  /** Parsed verb-expression condition (for if/elif written as a verb expression) */
+  expr?: ValueExpression;
 
   /** Optional alias (for :loop :as) */
   alias?: string;
