@@ -365,12 +365,18 @@ export class Parser {
         const directiveValue = this.getTokenVal(this.peek());
         this.advance();
         this.state.pendingHeaderDirective = { key: '_type', value: directiveValue };
-      } else if (directiveName === 'if' || directiveName === 'elif') {
+      } else if (
+        directiveName === 'if' ||
+        directiveName === 'elif' ||
+        directiveName === 'loop' ||
+        directiveName === 'counter' ||
+        directiveName === 'from'
+      ) {
         this.advance(); // consume :
         this.skipWs();
         this.advance(); // consume directive name
         this.skipWs();
-        // Capture the raw expression text from here to the closing brace
+        // Capture the raw value text from here to the closing brace
         const exprStart = this.peek().start;
         let exprEnd = exprStart;
         while (!this.isAtEnd() && this.peek().type !== TokenType.HEADER_CLOSE) {
