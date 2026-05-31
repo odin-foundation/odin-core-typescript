@@ -42,6 +42,9 @@ export interface OdinModifiers {
 
   /** Emit as XML attribute instead of child element (:attr modifier). */
   readonly attr?: boolean;
+
+  /** XML namespace prefix for the element (:ns modifier). */
+  readonly ns?: string;
 }
 
 /**

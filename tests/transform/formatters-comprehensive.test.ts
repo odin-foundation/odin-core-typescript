@@ -54,8 +54,8 @@ function bool(value: boolean): TransformValue {
 function nil(): TransformValue {
   return { type: 'null' };
 }
-function currency(value: number, raw?: string): TransformValue {
-  return { type: 'currency', value, raw };
+function currency(value: number, raw?: string, currencyCode?: string): TransformValue {
+  return { type: 'currency', value, raw, currencyCode };
 }
 function date(raw: string): TransformValue {
   return { type: 'date', value: raw, raw };
@@ -312,9 +312,16 @@ describe('XML Formatter - Comprehensive', () => {
     expect(result).toContain('odin:type="number"');
   });
 
-  it('includes type attribute for currency', () => {
+  it('includes currency type and code only for coded currency', () => {
+    const result = fmt({ price: currency(99.99, '99.99', 'USD') }, 'xml');
+    expect(result).toContain('odin:type="currency"');
+    expect(result).toContain('odin:currencyCode="USD"');
+  });
+
+  it('renders code-less currency as currency with no currencyCode', () => {
     const result = fmt({ price: currency(99.99) }, 'xml');
     expect(result).toContain('odin:type="currency"');
+    expect(result).not.toContain('odin:currencyCode');
   });
 
   it('includes type attribute for boolean', () => {

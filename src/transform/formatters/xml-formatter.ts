@@ -34,7 +34,9 @@ interface XmlTreeNode {
 export function formatXmlFromOdin(doc: OdinDocument, transform: OdinTransform): string {
   const indent = transform.target.indent ?? 2;
   const declaration = transform.target.declaration !== false;
-  const includeOdinNamespace = needsOdinNamespace(doc);
+  const emitTypeHints = transform.target.emitTypeHints !== false;
+  const includeOdinNamespace = emitTypeHints && needsOdinNamespace(doc);
+  const namespaces = transform.target.namespaces;
 
   let xml = '';
   if (declaration) {
@@ -42,7 +44,7 @@ export function formatXmlFromOdin(doc: OdinDocument, transform: OdinTransform): 
   }
 
   // Build XML with type fidelity and modifiers
-  xml += odinDocToXml(doc, indent, includeOdinNamespace);
+  xml += odinDocToXml(doc, indent, includeOdinNamespace, emitTypeHints, namespaces);
   return xml;
 }
 
@@ -72,12 +74,38 @@ function needsOdinNamespace(doc: OdinDocument): boolean {
 /**
  * Convert OdinDocument to XML with full type fidelity and modifier preservation.
  */
-function odinDocToXml(doc: OdinDocument, indent: number, includeNamespace: boolean): string {
+function odinDocToXml(
+  doc: OdinDocument,
+  indent: number,
+  includeNamespace: boolean,
+  emitTypeHints: boolean,
+  namespaces: Map<string, string> | undefined
+): string {
   // Build a tree structure from flat paths
   const tree = buildTreeFromPaths(doc);
 
   // Render the tree to XML
-  return renderXmlTree(tree, doc, 0, indent, includeNamespace, true);
+  return renderXmlTree(tree, doc, 0, indent, includeNamespace, true, emitTypeHints, namespaces);
+}
+
+/**
+ * Build xmlns:<prefix> declarations for target namespaces in insertion order.
+ */
+function buildNamespaceDeclarations(namespaces: Map<string, string> | undefined): string {
+  if (!namespaces || namespaces.size === 0) return '';
+  const decls: string[] = [];
+  for (const [prefix, uri] of namespaces) {
+    decls.push(`xmlns:${prefix}="${escapeXml(uri)}"`);
+  }
+  return ' ' + decls.join(' ');
+}
+
+/**
+ * Qualify an element name with its namespace prefix when the value carries :ns.
+ */
+function nsQualify(key: string, value: OdinValue | undefined): string {
+  const prefix = value?.modifiers?.ns;
+  return prefix ? `${prefix}:${key}` : key;
 }
 
 /**
@@ -180,6 +208,20 @@ function sanitizeXmlName(key: string): string {
 }
 
 /**
+ * Root-element attributes: the odin namespace (when type hints are emitted) plus
+ * any declared target namespaces. Empty for non-root elements.
+ */
+function buildRootAttributes(
+  isRoot: boolean,
+  includeNamespace: boolean,
+  namespaces: Map<string, string> | undefined
+): string {
+  if (!isRoot) return '';
+  const odinNs = includeNamespace ? ' xmlns:odin="https://odin.foundation/ns"' : '';
+  return odinNs + buildNamespaceDeclarations(namespaces);
+}
+
+/**
  * Render a tree node to XML.
  */
 function renderXmlTree(
@@ -188,7 +230,9 @@ function renderXmlTree(
   depth: number,
   indent: number,
   includeNamespace: boolean,
-  isRoot: boolean
+  isRoot: boolean,
+  emitTypeHints: boolean,
+  namespaces: Map<string, string> | undefined
 ): string {
   const parts: string[] = [];
   const pad = ' '.repeat(depth * indent);
@@ -202,7 +246,7 @@ function renderXmlTree(
 
     if (child.children.size > 0 && !child.value) {
       // Container element
-      let attrs = isRoot && includeNamespace ? ' xmlns:odin="https://odin.foundation/ns"' : '';
+      let attrs = buildRootAttributes(isRoot, includeNamespace, namespaces);
 
       // Collect :attr children for this container
       const { attrString, skipKeys } = collectAttrChildren(child, doc);
@@ -220,40 +264,57 @@ function renderXmlTree(
             arrayItem,
             doc
           );
-          const itemAttrs = buildXmlAttributes(arrayItem.path, arrayItem.value, doc) + itemAttrStr;
+          const itemAttrs =
+            buildXmlAttributes(arrayItem.path, arrayItem.value, doc, emitTypeHints) + itemAttrStr;
+          const itemTag = nsQualify(key, arrayItem.value);
 
           if (arrayItem.value) {
             const valueStr = odinValueToXmlString(arrayItem.value);
-            parts.push(`${pad}<${key}${itemAttrs}>${escapeXml(valueStr)}</${key}>\n`);
+            parts.push(`${pad}<${itemTag}${itemAttrs}>${escapeXml(valueStr)}</${itemTag}>\n`);
           } else {
-            parts.push(`${pad}<${key}${itemAttrs}>\n`);
+            parts.push(`${pad}<${itemTag}${itemAttrs}>\n`);
             parts.push(
-              renderXmlTreeFiltered(arrayItem, doc, depth + 1, indent, false, false, itemSkipKeys)
+              renderXmlTreeFiltered(
+                arrayItem,
+                doc,
+                depth + 1,
+                indent,
+                false,
+                false,
+                itemSkipKeys,
+                emitTypeHints,
+                namespaces
+              )
             );
-            parts.push(`${pad}</${key}>\n`);
+            parts.push(`${pad}</${itemTag}>\n`);
           }
         }
       } else {
         // Regular container - skip :attr children when rendering
         parts.push(`${pad}<${key}${attrs}>\n`);
-        parts.push(renderXmlTreeFiltered(child, doc, depth + 1, indent, false, false, skipKeys));
+        parts.push(
+          renderXmlTreeFiltered(child, doc, depth + 1, indent, false, false, skipKeys, emitTypeHints, namespaces)
+        );
         parts.push(`${pad}</${key}>\n`);
       }
     } else if (child.value) {
       // Leaf element with value - skip if it has :attr (already handled by parent)
       if (hasAttrModifier(child.value)) continue;
 
-      const attrs = buildXmlAttributes(child.path, child.value, doc);
+      const attrs = buildXmlAttributes(child.path, child.value, doc, emitTypeHints);
       const valueStr = odinValueToXmlString(child.value);
+      const tag = nsQualify(key, child.value);
 
       if (child.children.size > 0) {
         // Has both value and children (complex type) - rare case
-        parts.push(`${pad}<${key}${attrs}>\n`);
+        parts.push(`${pad}<${tag}${attrs}>\n`);
         parts.push(`${pad}${' '.repeat(indent)}${escapeXml(valueStr)}\n`);
-        parts.push(renderXmlTree(child, doc, depth + 1, indent, false, false));
-        parts.push(`${pad}</${key}>\n`);
+        parts.push(
+          renderXmlTree(child, doc, depth + 1, indent, false, false, emitTypeHints, namespaces)
+        );
+        parts.push(`${pad}</${tag}>\n`);
       } else {
-        parts.push(`${pad}<${key}${attrs}>${escapeXml(valueStr)}</${key}>\n`);
+        parts.push(`${pad}<${tag}${attrs}>${escapeXml(valueStr)}</${tag}>\n`);
       }
     }
   }
@@ -271,7 +332,9 @@ function renderXmlTreeFiltered(
   indent: number,
   includeNamespace: boolean,
   isRoot: boolean,
-  skipKeys: Set<string>
+  skipKeys: Set<string>,
+  emitTypeHints: boolean,
+  namespaces: Map<string, string> | undefined
 ): string {
   const parts: string[] = [];
   const pad = ' '.repeat(depth * indent);
@@ -288,7 +351,7 @@ function renderXmlTreeFiltered(
 
     if (child.children.size > 0 && !child.value) {
       // Container element
-      let attrs = isRoot && includeNamespace ? ' xmlns:odin="https://odin.foundation/ns"' : '';
+      let attrs = buildRootAttributes(isRoot, includeNamespace, namespaces);
 
       // Collect :attr children for this container
       const { attrString, skipKeys: childSkipKeys } = collectAttrChildren(child, doc);
@@ -305,38 +368,63 @@ function renderXmlTreeFiltered(
             arrayItem,
             doc
           );
-          const itemAttrs = buildXmlAttributes(arrayItem.path, arrayItem.value, doc) + itemAttrStr;
+          const itemAttrs =
+            buildXmlAttributes(arrayItem.path, arrayItem.value, doc, emitTypeHints) + itemAttrStr;
+          const itemTag = nsQualify(key, arrayItem.value);
 
           if (arrayItem.value) {
             const valueStr = odinValueToXmlString(arrayItem.value);
-            parts.push(`${pad}<${key}${itemAttrs}>${escapeXml(valueStr)}</${key}>\n`);
+            parts.push(`${pad}<${itemTag}${itemAttrs}>${escapeXml(valueStr)}</${itemTag}>\n`);
           } else {
-            parts.push(`${pad}<${key}${itemAttrs}>\n`);
+            parts.push(`${pad}<${itemTag}${itemAttrs}>\n`);
             parts.push(
-              renderXmlTreeFiltered(arrayItem, doc, depth + 1, indent, false, false, itemSkipKeys)
+              renderXmlTreeFiltered(
+                arrayItem,
+                doc,
+                depth + 1,
+                indent,
+                false,
+                false,
+                itemSkipKeys,
+                emitTypeHints,
+                namespaces
+              )
             );
-            parts.push(`${pad}</${key}>\n`);
+            parts.push(`${pad}</${itemTag}>\n`);
           }
         }
       } else {
         // Regular container
         parts.push(`${pad}<${key}${attrs}>\n`);
         parts.push(
-          renderXmlTreeFiltered(child, doc, depth + 1, indent, false, false, childSkipKeys)
+          renderXmlTreeFiltered(
+            child,
+            doc,
+            depth + 1,
+            indent,
+            false,
+            false,
+            childSkipKeys,
+            emitTypeHints,
+            namespaces
+          )
         );
         parts.push(`${pad}</${key}>\n`);
       }
     } else if (child.value) {
-      const attrs = buildXmlAttributes(child.path, child.value, doc);
+      const attrs = buildXmlAttributes(child.path, child.value, doc, emitTypeHints);
       const valueStr = odinValueToXmlString(child.value);
+      const tag = nsQualify(key, child.value);
 
       if (child.children.size > 0) {
-        parts.push(`${pad}<${key}${attrs}>\n`);
+        parts.push(`${pad}<${tag}${attrs}>\n`);
         parts.push(`${pad}${' '.repeat(indent)}${escapeXml(valueStr)}\n`);
-        parts.push(renderXmlTreeFiltered(child, doc, depth + 1, indent, false, false, new Set()));
-        parts.push(`${pad}</${key}>\n`);
+        parts.push(
+          renderXmlTreeFiltered(child, doc, depth + 1, indent, false, false, new Set(), emitTypeHints, namespaces)
+        );
+        parts.push(`${pad}</${tag}>\n`);
       } else {
-        parts.push(`${pad}<${key}${attrs}>${escapeXml(valueStr)}</${key}>\n`);
+        parts.push(`${pad}<${tag}${attrs}>${escapeXml(valueStr)}</${tag}>\n`);
       }
     }
   }
@@ -350,18 +438,25 @@ function renderXmlTreeFiltered(
 function buildXmlAttributes(
   path: string | undefined,
   value: OdinValue | undefined,
-  doc: OdinDocument
+  doc: OdinDocument,
+  emitTypeHints: boolean
 ): string {
+  // emitTypeHints=false produces plain XML with no odin: attributes
+  if (!emitTypeHints) return '';
+
   const attrs: string[] = [];
 
-  // Add type attribute (skip for string as it's the default)
-  if (value && value.type !== 'string') {
+  // Currency is first-class: always odin:type="currency"; emit currencyCode when present.
+  // Decimal scale is preserved by the value renderer (toFixed/raw).
+  if (value && value.type === 'currency') {
+    attrs.push(`odin:type="currency"`);
+    const code = 'currencyCode' in value && value.currencyCode ? value.currencyCode : undefined;
+    if (code) {
+      attrs.push(`odin:currencyCode="${code}"`);
+    }
+  } else if (value && value.type !== 'string') {
+    // Type attribute (string is the default and omitted)
     attrs.push(`odin:type="${value.type}"`);
-  }
-
-  // Add currency code attribute for currency values
-  if (value && value.type === 'currency' && 'currencyCode' in value && value.currencyCode) {
-    attrs.push(`odin:currencyCode="${value.currencyCode}"`);
   }
 
   // Add modifier attributes

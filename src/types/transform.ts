@@ -181,6 +181,9 @@ export interface TargetConfig {
 
   /** XML namespace declarations */
   namespaces?: Map<string, string> | undefined;
+
+  /** Emit ODIN type-hint attributes and odin namespace (default true) */
+  emitTypeHints?: boolean | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -427,6 +430,9 @@ export interface TransformContext {
 
   /** Current loop item (for @. references) */
   current?: unknown;
+
+  /** OdinDoc path prefix of the current loop item (e.g. "employees[0]"), for type preservation */
+  currentOdinPath?: string;
 
   /** Loop aliases */
   aliases: Map<string, unknown>;

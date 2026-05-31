@@ -200,6 +200,7 @@ class TransformParser {
       padChar: this.getStringValue('$.target.padChar'),
       truncate: this.getBooleanValue('$.target.truncate'),
       declaration: this.getBooleanValue('$.target.declaration'),
+      emitTypeHints: this.getBooleanValue('$.target.emitTypeHints'),
       omitEmpty: this.getBooleanValue('$.target.omitEmpty'),
       delimiter: this.getStringValue('$.target.delimiter'),
       quote: this.getStringValue('$.target.quote'),

@@ -136,6 +136,14 @@ function runTransformTest(test: TestDefinition, categoryPath: string): void {
   if (hasDiscriminator && isLineBasedFormat) {
     // Pass raw string for multi-record processing
     input = inputRaw;
+  } else if (
+    sourceFormat === 'odin' &&
+    transform.source?.format === 'odin' &&
+    transform.target?.format === 'xml'
+  ) {
+    // Feed raw ODIN so the engine parses type-preservingly (currency type + scale)
+    // for the XML export. Flattening via toJSON() would collapse currency to a bare number.
+    input = inputRaw;
   } else {
     // Parse input based on source format
     input = parseInput(inputRaw, sourceFormat);

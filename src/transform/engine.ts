@@ -456,6 +456,12 @@ class TransformEngine {
         const results: unknown[] = [];
         const counterName = segment.directives.find((d) => d.type === 'counter')?.value;
 
+        // When looping the root ODIN source, track each item's doc path for type preservation.
+        const loopIsRootSource =
+          context.sourceOdinDoc !== undefined &&
+          !context.currentOdinPath &&
+          resolvePath(loopPath, context.source) === items;
+
         for (let i = 0; i < items.length; i++) {
           const itemContext: TransformContext = {
             ...context,
@@ -464,6 +470,12 @@ class TransformEngine {
             counters: new Map(context.counters),
             loopDepth: context.loopDepth + 1,
           };
+
+          if (loopIsRootSource) {
+            itemContext.currentOdinPath = `${loopPath}[${i}]`;
+          } else {
+            delete itemContext.currentOdinPath;
+          }
 
           if (loopDirective.alias) {
             itemContext.aliases.set(loopDirective.alias, items[i]);
@@ -585,8 +597,9 @@ class TransformEngine {
         const hasConfidential = mapping.confidential === true;
         const hasDeprecated = mapping.modifiers.some((m) => m.name === 'deprecated');
         const hasAttr = mapping.modifiers.some((m) => m.name === 'attr');
+        const nsMod = mapping.modifiers.find((m) => m.name === 'ns');
 
-        if (hasRequired || hasConfidential || hasDeprecated || hasAttr) {
+        if (hasRequired || hasConfidential || hasDeprecated || hasAttr || nsMod?.value) {
           value = {
             ...value,
             modifiers: {
@@ -594,6 +607,7 @@ class TransformEngine {
               ...(hasConfidential ? { confidential: true } : {}),
               ...(hasDeprecated ? { deprecated: true } : {}),
               ...(hasAttr ? { attr: true } : {}),
+              ...(nsMod?.value ? { ns: String(nsMod.value) } : {}),
             },
           } as TransformValue;
         }
@@ -728,6 +742,14 @@ class TransformEngine {
     if (path.startsWith('.')) {
       targetObj = context.current !== undefined ? context.current : context.source;
       targetPath = path.slice(1);
+
+      // Preserve ODIN type info for loop-item fields via the item's doc path.
+      if (context.sourceOdinDoc && context.currentOdinPath && targetPath) {
+        const odinValue = context.sourceOdinDoc.get(`${context.currentOdinPath}.${targetPath}`);
+        if (odinValue) {
+          return odinValueToTransformValue(odinValue);
+        }
+      }
     } else {
       const firstPart = path.split('.')[0]!;
       if (context.aliases.has(firstPart)) {
