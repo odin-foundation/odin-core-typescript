@@ -116,6 +116,34 @@ export class Odin {
   }
 
   /**
+   * Parse a chained ODIN document (one or more documents separated by `---`)
+   * into the full list of documents. A single document yields a one-element array.
+   *
+   * @example
+   * ```typescript
+   * const docs = Odin.parseDocuments('{$}\nid = "a"\n\n---\n\n{$}\nid = "b"');
+   * docs.length; // 2
+   * ```
+   */
+  static parseDocuments(input: string | Uint8Array, options?: ParseOptions): OdinDocument[] {
+    const source = typeof input === 'string' ? input : new TextDecoder('utf-8').decode(input);
+    const parser = new Parser(options);
+    const parsed = parser.parse(source);
+    const all = [parsed, ...(parsed.chainedDocuments ?? [])];
+    return all.map(
+      (d) =>
+        new OdinDocumentImpl(
+          d.metadata,
+          d.assignments,
+          d.modifiers,
+          d.imports,
+          d.schemas,
+          d.conditionals
+        )
+    );
+  }
+
+  /**
    * Parse ODIN text using streaming (for large documents).
    *
    * @param reader - Readable stream of UTF-8 bytes

@@ -33,6 +33,10 @@ interface GoldenTest {
     assignments?: Record<string, ExpectedValue>;
     modifiers?: Record<string, { critical?: boolean; redacted?: boolean; deprecated?: boolean }>;
     directives?: ExpectedDirective[];
+    documents?: Array<{
+      metadata?: Record<string, string | number | boolean>;
+      assignments?: Record<string, ExpectedValue>;
+    }>;
   };
   expectError?: {
     code: string;
@@ -225,6 +229,28 @@ describe('Golden Parse Tests', () => {
           } else if (test.expected) {
             // Should parse successfully
             const doc = Odin.parse(test.input);
+
+            // Check chained documents
+            if (test.expected.documents) {
+              const docs = Odin.parseDocuments(test.input);
+              expect(docs.length).toBe(test.expected.documents.length);
+              test.expected.documents.forEach((expDoc, i) => {
+                const d = docs[i]!;
+                if (expDoc.metadata) {
+                  for (const [key, raw] of Object.entries(expDoc.metadata)) {
+                    const actual = d.get(`$.${key}`) as { value?: unknown; raw?: string } | undefined;
+                    expect(actual).toBeDefined();
+                    // metadata values are raw primitives; prefer the source raw form (dates/numbers)
+                    expect(String(actual?.raw ?? actual?.value)).toBe(String(raw));
+                  }
+                }
+                if (expDoc.assignments) {
+                  for (const [p, ev] of Object.entries(expDoc.assignments)) {
+                    expect(compareValue(d.get(p), ev)).toBe(true);
+                  }
+                }
+              });
+            }
 
             // Check assignments
             if (test.expected.assignments) {

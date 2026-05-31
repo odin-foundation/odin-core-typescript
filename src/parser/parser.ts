@@ -1008,7 +1008,7 @@ export class Parser {
       // Handle @$const.NAME references
       if (this.peek().type === TokenType.PREFIX_META) {
         this.advance(); // consume $
-        const metaPath = this.parsePath(false);
+        const metaPath = this.parsePath(true);
         return { type: 'reference', path: '$' + metaPath };
       }
       const refPath = this.parsePath(true);
@@ -1185,7 +1185,7 @@ export class Parser {
       // Handle @$const.NAME references
       if (this.peek().type === TokenType.PREFIX_META) {
         this.advance(); // consume $
-        const metaPath = this.parsePath(false);
+        const metaPath = this.parsePath(true);
         value = { type: 'reference', path: '$' + metaPath };
       } else {
         const refPath = this.parsePath(true);
