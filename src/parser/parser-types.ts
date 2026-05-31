@@ -111,6 +111,6 @@ export interface ParserState {
   /** Track array indices per array path */
   arrayIndices: Map<string, number[]>;
 
-  /** Pending inline discriminator from header (e.g., {segment :type "value"}) */
-  pendingDiscriminator?: { key: string; value: string } | undefined;
+  /** Pending inline directive from header (e.g., {segment :type "value"} or {segment :if "expr"}) */
+  pendingHeaderDirective?: { key: string; value: string } | undefined;
 }

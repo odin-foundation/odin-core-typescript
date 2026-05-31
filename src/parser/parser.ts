@@ -98,7 +98,7 @@ export class Parser {
       tableRowIndex: 0,
       assignedPaths: new Set(),
       arrayIndices: new Map(),
-      pendingDiscriminator: undefined,
+      pendingHeaderDirective: undefined,
     };
   }
 
@@ -176,16 +176,16 @@ export class Parser {
 
       if (tokenType === TokenType.HEADER_OPEN) {
         this.parseHeader();
-        // Emit pending discriminator assignment if present (from inline {segment :type "value"} syntax)
-        if (this.state.pendingDiscriminator) {
+        // Emit pending inline directive as a synthetic assignment (from {segment :type "value"} / {segment :if "expr"} syntax)
+        if (this.state.pendingHeaderDirective) {
           const fullPath = this.state.headerPath
-            ? `${this.state.headerPath}.${this.state.pendingDiscriminator.key}`
-            : this.state.pendingDiscriminator.key;
+            ? `${this.state.headerPath}.${this.state.pendingHeaderDirective.key}`
+            : this.state.pendingHeaderDirective.key;
           currentDoc.assignments.set(fullPath, {
             type: 'string',
-            value: this.state.pendingDiscriminator.value,
+            value: this.state.pendingHeaderDirective.value,
           });
-          this.state.pendingDiscriminator = undefined;
+          this.state.pendingHeaderDirective = undefined;
         }
         continue;
       }
@@ -312,11 +312,12 @@ export class Parser {
 
     const pathStr = pathParts.join('.');
 
-    // Clear any pending discriminator from previous headers
-    this.state.pendingDiscriminator = undefined;
+    // Clear any pending inline directive from previous headers
+    this.state.pendingHeaderDirective = undefined;
 
     if (this.peek().type === TokenType.COLON) {
-      // Distinguish {segment :type "value"} (discriminator) from {array[] : type, col} (tabular)
+      // Distinguish {segment :type "value"} / {segment :if "expr"} (inline directive)
+      // from {array[] : type, col} (tabular columns)
       let lookAhead = this.pos + 1;
       while (
         lookAhead < this.tokens.length &&
@@ -326,13 +327,14 @@ export class Parser {
       }
       // Bounds check before accessing token
       const lookAheadToken = lookAhead < this.tokens.length ? this.tokens[lookAhead] : undefined;
-      const isTypeIdent =
-        lookAheadToken?.type === TokenType.IDENTIFIER &&
-        lookAheadToken !== undefined &&
-        this.getTokenVal(lookAheadToken) === 'type';
+      const directiveName =
+        lookAheadToken?.type === TokenType.IDENTIFIER
+          ? this.getTokenVal(lookAheadToken)
+          : undefined;
+      const isInlineDirectiveName = directiveName === 'type' || directiveName === 'if';
 
-      let isDiscriminator = false;
-      if (isTypeIdent) {
+      let isInlineDirective = false;
+      if (isInlineDirectiveName) {
         let lookAhead2 = lookAhead + 1;
         while (
           lookAhead2 < this.tokens.length &&
@@ -340,18 +342,18 @@ export class Parser {
         ) {
           lookAhead2++;
         }
-        isDiscriminator = this.tokens[lookAhead2]?.type === TokenType.STRING_QUOTED;
+        isInlineDirective = this.tokens[lookAhead2]?.type === TokenType.STRING_QUOTED;
       }
 
-      if (isDiscriminator) {
+      if (isInlineDirective) {
         this.advance(); // consume :
         this.skipWs();
-        this.advance(); // consume 'type'
+        this.advance(); // consume directive name
         this.skipWs();
 
-        const typeValue = this.getTokenVal(this.peek());
+        const directiveValue = this.getTokenVal(this.peek());
         this.advance();
-        this.state.pendingDiscriminator = { key: '_type', value: typeValue };
+        this.state.pendingHeaderDirective = { key: `_${directiveName}`, value: directiveValue };
       } else if (pathStr.endsWith('[]')) {
         this.advance(); // consume :
         // Tabular mode - continue with existing logic (colon already consumed)

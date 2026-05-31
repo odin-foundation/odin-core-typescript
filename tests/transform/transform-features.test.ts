@@ -527,6 +527,49 @@ value = "@amount"
     });
   });
 
+  describe('Header-inline :if conditional', () => {
+    const transformDoc = `
+{$}
+odin = "1.0.0"
+transform = "1.0.0"
+direction = "json->json"
+
+{Quote}
+DriverName = "@driver.name"
+
+{DuiDetails :if "@driver.has_dui = true"}
+State = "@driver.dui.state"
+`;
+
+    it('includes the section when the inline condition is true', () => {
+      const transform = parseTransform(transformDoc);
+      const result = executeTransform(transform, {
+        driver: { name: 'Pat', has_dui: true, dui: { state: 'TX' } },
+      });
+      const output = getValues(result) as Record<string, unknown>;
+      expect(output).toHaveProperty('DuiDetails');
+      expect((output['DuiDetails'] as Record<string, unknown>)?.State).toBe('TX');
+    });
+
+    it('omits the section when the inline condition is false', () => {
+      const transform = parseTransform(transformDoc);
+      const result = executeTransform(transform, {
+        driver: { name: 'Sam', has_dui: false },
+      });
+      const output = getValues(result) as Record<string, unknown>;
+      expect(output).toHaveProperty('Quote');
+      expect(output).not.toHaveProperty('DuiDetails');
+    });
+
+    it('is equivalent to the body-line _if form', () => {
+      const transform = parseTransform(transformDoc);
+      const result = executeTransform(transform, {
+        driver: { name: 'Pat', has_dui: true, dui: { state: 'TX' } },
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
   describe('Import directive parsing', () => {
     it('parses imports from transform document', () => {
       const transformDoc = `
