@@ -212,6 +212,14 @@ export function parseTypedNumber(
   }
 
   if (kind === 'integer') {
+    if (!Number.isInteger(value)) {
+      throw new ParseError(
+        `Integer (##) value cannot have a fractional part: ${negative ? '-' : ''}${rawStr}`,
+        'P006',
+        numToken.line,
+        numToken.column
+      );
+    }
     const intValue = Math.trunc(value);
     const rawInt = negative ? `-${rawStr}` : rawStr;
     // Preserve raw for large integers that may lose precision

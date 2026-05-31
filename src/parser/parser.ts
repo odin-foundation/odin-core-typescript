@@ -795,7 +795,12 @@ export class Parser {
     let lastWasDot = false;
     const startToken = this.peek();
 
-    if (
+    if (startToken.type === TokenType.PREFIX_META) {
+      // Top-level metadata path ($.foo), e.g. canonical-form output
+      this.advance();
+      path = '$';
+      needsDot = true;
+    } else if (
       startToken.type !== TokenType.IDENTIFIER &&
       startToken.type !== TokenType.BOOLEAN &&
       startToken.type !== TokenType.ARRAY_INDEX &&
