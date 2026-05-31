@@ -527,7 +527,7 @@ class TransformEngine {
     context: TransformContext,
     output: Record<string, unknown>
   ): void {
-    const loopDirective = segment.directives.find((d) => d.type === 'loop');
+    const loopDirectives = segment.directives.filter((d) => d.type === 'loop');
     // _from directive provides an alternative loop source path
     const fromDirective = segment.directives.find((d) => d.type === 'from');
 
@@ -535,75 +535,16 @@ class TransformEngine {
     // (accumulators, verbs) and never appears in the output.
     const isSink = this.isSinkSegment(segment.path);
 
-    if (loopDirective && segment.isArray) {
-      // Security: Check loop nesting depth to prevent stack overflow attacks
-      if (context.loopDepth >= SECURITY_LIMITS.MAX_LOOP_NESTING) {
-        throw new Error(
-          `Loop nesting depth ${context.loopDepth + 1} exceeds maximum allowed depth of ${SECURITY_LIMITS.MAX_LOOP_NESTING}`
-        );
-      }
+    if (loopDirectives.length > 0 && segment.isArray) {
+      const counterName = segment.directives.find((d) => d.type === 'counter')?.value;
+      // _from overrides the source path of the outermost loop only.
+      const firstFrom = fromDirective?.value;
+      const results: unknown[] = [];
 
-      // Priority: _from directive > _loop value > segment path
-      let loopPath = fromDirective?.value || loopDirective.value || segment.path;
-      if (loopPath.startsWith('@')) {
-        loopPath = loopPath.slice(1);
-      }
-      const items = resolvePath(loopPath, context.source);
+      this.iterateLoops(loopDirectives, 0, context, segment, firstFrom, counterName, results);
 
-      if (Array.isArray(items)) {
-        const results: unknown[] = [];
-        const counterName = segment.directives.find((d) => d.type === 'counter')?.value;
-
-        // When looping the root ODIN source, track each item's doc path for type preservation.
-        const loopIsRootSource =
-          context.sourceOdinDoc !== undefined &&
-          !context.currentOdinPath &&
-          resolvePath(loopPath, context.source) === items;
-
-        for (let i = 0; i < items.length; i++) {
-          const itemContext: TransformContext = {
-            ...context,
-            current: items[i],
-            aliases: new Map(context.aliases),
-            counters: new Map(context.counters),
-            loopDepth: context.loopDepth + 1,
-          };
-
-          if (loopIsRootSource) {
-            itemContext.currentOdinPath = `${loopPath}[${i}]`;
-          } else {
-            delete itemContext.currentOdinPath;
-          }
-
-          if (loopDirective.alias) {
-            itemContext.aliases.set(loopDirective.alias, items[i]);
-          }
-          if (counterName) {
-            itemContext.counters.set(counterName, i);
-          }
-          itemContext.counters.set('_index', i);
-
-          const isValueOnly = segment.mappings.length === 1 && segment.mappings[0]!.target === '_';
-
-          if (isValueOnly) {
-            const mapping = segment.mappings[0]!;
-            let value = this.evaluateExpression(mapping.value, itemContext);
-            value = applyModifiers(value, mapping.modifiers, itemContext, (path, ctx) =>
-              this.resolvePathValue(path, ctx)
-            );
-            results.push(value);
-          } else {
-            const itemOutput: Record<string, unknown> = {};
-            for (const mapping of segment.mappings) {
-              this.processMapping(mapping, itemContext, itemOutput, segment.path);
-            }
-            results.push(itemOutput);
-          }
-        }
-
-        if (!isSink) {
-          setNestedValue(output, segment.path, results);
-        }
+      if (!isSink) {
+        setNestedValue(output, segment.path, results);
       }
     } else {
       // Process single segment
@@ -624,6 +565,113 @@ class TransformEngine {
         if (Object.keys(segmentOutput).length > 0) {
           output[segment.path] = segmentOutput;
         }
+      }
+    }
+  }
+
+  // Drive one or more :loop directives as a nested cross-product. Each level binds
+  // its alias and current item, then recurses into the next loop; the innermost
+  // level emits one result element per item. Relative loop paths (`.field`)
+  // resolve against the current outer item.
+  private iterateLoops(
+    loops: SegmentDirective[],
+    depth: number,
+    context: TransformContext,
+    segment: TransformSegment,
+    firstFrom: string | undefined,
+    counterName: string | undefined,
+    results: unknown[]
+  ): void {
+    if (context.loopDepth >= SECURITY_LIMITS.MAX_LOOP_NESTING) {
+      throw new Error(
+        `Loop nesting depth ${context.loopDepth + 1} exceeds maximum allowed depth of ${SECURITY_LIMITS.MAX_LOOP_NESTING}`
+      );
+    }
+
+    const loop = loops[depth]!;
+    const isOutermost = depth === 0;
+
+    // Outermost loop: _from > loop value > segment path; resolves against source.
+    // Inner loops resolve against the current outer item (relative or aliased).
+    let loopPath = (isOutermost ? firstFrom || loop.value || segment.path : loop.value) || '';
+    if (loopPath.startsWith('@')) {
+      loopPath = loopPath.slice(1);
+    }
+
+    const base =
+      isOutermost && !context.current ? context.source : (context.current ?? context.source);
+    let items: unknown;
+    if (loopPath.startsWith('.')) {
+      items = resolvePath(loopPath.slice(1), context.current ?? context.source);
+    } else if (isOutermost) {
+      items = resolvePath(loopPath, context.source);
+    } else {
+      const firstPart = loopPath.split('.')[0]!;
+      if (context.aliases.has(firstPart)) {
+        const aliased = context.aliases.get(firstPart);
+        const rest = loopPath.includes('.') ? loopPath.slice(firstPart.length + 1) : '';
+        items = rest ? resolvePath(rest, aliased) : aliased;
+      } else {
+        items = resolvePath(loopPath, base);
+      }
+    }
+
+    if (!Array.isArray(items)) return;
+
+    // Type preservation: track the ODIN doc path of the current item when resolvable.
+    const trackOdin =
+      context.sourceOdinDoc !== undefined &&
+      (isOutermost ? !context.currentOdinPath : context.currentOdinPath !== undefined);
+    const odinBase = isOutermost
+      ? loopPath
+      : loopPath.startsWith('.')
+        ? `${context.currentOdinPath}.${loopPath.slice(1)}`
+        : undefined;
+
+    const isInnermost = depth === loops.length - 1;
+
+    for (let i = 0; i < items.length; i++) {
+      const itemContext: TransformContext = {
+        ...context,
+        current: items[i],
+        aliases: new Map(context.aliases),
+        counters: new Map(context.counters),
+        loopDepth: context.loopDepth + 1,
+      };
+
+      if (trackOdin && odinBase) {
+        itemContext.currentOdinPath = `${odinBase}[${i}]`;
+      } else {
+        delete itemContext.currentOdinPath;
+      }
+
+      if (loop.alias) {
+        itemContext.aliases.set(loop.alias, items[i]);
+      }
+      itemContext.counters.set('_index', i);
+      if (counterName && isInnermost) {
+        itemContext.counters.set(counterName, i);
+      }
+
+      if (!isInnermost) {
+        this.iterateLoops(loops, depth + 1, itemContext, segment, undefined, counterName, results);
+        continue;
+      }
+
+      const isValueOnly = segment.mappings.length === 1 && segment.mappings[0]!.target === '_';
+      if (isValueOnly) {
+        const mapping = segment.mappings[0]!;
+        let value = this.evaluateExpression(mapping.value, itemContext);
+        value = applyModifiers(value, mapping.modifiers, itemContext, (path, ctx) =>
+          this.resolvePathValue(path, ctx)
+        );
+        results.push(value);
+      } else {
+        const itemOutput: Record<string, unknown> = {};
+        for (const mapping of segment.mappings) {
+          this.processMapping(mapping, itemContext, itemOutput, segment.path);
+        }
+        results.push(itemOutput);
       }
     }
   }

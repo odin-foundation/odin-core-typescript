@@ -533,7 +533,9 @@ class TransformParser {
   private parseDirective(name: string, fullPath: string): SegmentDirective | null {
     // Parse directive from path like ":loop", ":type", "_loop", "_type", etc.
     // Strip leading : or _ prefix
-    const directiveName = name.slice(1).split('.')[0]!;
+    let directiveName = name.slice(1).split('.')[0]!;
+    // Repeated loops are stored as loop, loop2, loop3...; normalize back to 'loop'.
+    if (/^loop\d+$/.test(directiveName)) directiveName = 'loop';
 
     switch (directiveName) {
       case 'if':

@@ -761,7 +761,15 @@ export class Parser {
       value = this.source.slice(valStart, valEnd);
     }
 
-    const fullPath = this.state.headerPath ? `${this.state.headerPath}._${name}` : `_${name}`;
+    // Repeated `:loop` lines on one segment each get a distinct path so all survive.
+    let key = `_${name}`;
+    if (name === 'loop') {
+      const base = this.state.headerPath ? `${this.state.headerPath}._loop` : '_loop';
+      let n = 1;
+      while (this.state.assignedPaths.has(n === 1 ? base : `${base}${n}`)) n++;
+      key = n === 1 ? '_loop' : `_loop${n}`;
+    }
+    const fullPath = this.state.headerPath ? `${this.state.headerPath}.${key}` : key;
     if (!this.state.assignedPaths.has(fullPath)) {
       this.state.assignedPaths.add(fullPath);
       doc.assignments.set(fullPath, { type: 'string', value });
