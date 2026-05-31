@@ -593,6 +593,73 @@ state = "@driver.state"
     });
   });
 
+  describe('Conditional chains (elif/else)', () => {
+    const chain = `
+{$}
+odin = "1.0.0"
+transform = "1.0.0"
+direction = "json->json"
+
+{HighRisk :if %eq @driver.tier "dui"}
+band = "high-risk"
+
+{YoungDriver :elif %lt @driver.age ##25}
+band = "young-driver"
+
+{Standard :else}
+band = "standard"
+`;
+
+    const bands = (src: unknown): string[] => {
+      const out = getValues(executeTransform(parseTransform(chain), src)) as Record<string, unknown>;
+      return Object.keys(out);
+    };
+
+    it('takes the if branch and skips the rest', () => {
+      expect(bands({ driver: { tier: 'dui', age: 30 } })).toEqual(['HighRisk']);
+    });
+
+    it('falls through to a matching elif', () => {
+      expect(bands({ driver: { tier: 'std', age: 20 } })).toEqual(['YoungDriver']);
+    });
+
+    it('falls through to else when no branch matches', () => {
+      expect(bands({ driver: { tier: 'std', age: 40 } })).toEqual(['Standard']);
+    });
+
+    it('errors (T012) on elif with no preceding if', () => {
+      const t = `
+{$}
+direction = "json->json"
+
+{A}
+x = "1"
+
+{B :elif %eq @y "z"}
+v = "2"
+`;
+      const result = executeTransform(parseTransform(t), { y: 'q' });
+      expect(result.success).toBe(false);
+      expect(result.errors.some((e) => e.code === 'T012')).toBe(true);
+    });
+
+    it('errors (T012) on else with no preceding if', () => {
+      const t = `
+{$}
+direction = "json->json"
+
+{A}
+x = "1"
+
+{B :else}
+v = "2"
+`;
+      const result = executeTransform(parseTransform(t), {});
+      expect(result.success).toBe(false);
+      expect(result.errors.some((e) => e.code === 'T012')).toBe(true);
+    });
+  });
+
   describe('Import directive parsing', () => {
     it('parses imports from transform document', () => {
       const transformDoc = `

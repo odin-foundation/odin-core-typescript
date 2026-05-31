@@ -51,6 +51,9 @@ export const TransformErrorCodes = {
   /** Incompatible or unknown conversion target */
   T011_INCOMPATIBLE_CONVERSION: 'T011',
 
+  /** Conditional branch (elif/else) with no preceding if */
+  T012_DANGLING_BRANCH: 'T012',
+
   // Extended codes (implementation-specific)
 
   /** Configuration error - transform document is misconfigured */
@@ -122,6 +125,18 @@ export function invalidVerbArgsError(
     message: `Invalid arguments for verb '${verb}': expected ${expected}, got ${actual}`,
   };
   if (field !== undefined) error.field = field;
+  return error;
+}
+
+/**
+ * Create a T012 Dangling Branch error (elif/else without a preceding if).
+ */
+export function danglingBranchError(directive: string, segment?: string): TransformError {
+  const error: TransformError = {
+    code: TransformErrorCodes.T012_DANGLING_BRANCH,
+    message: `'${directive}' segment has no preceding 'if'`,
+  };
+  if (segment !== undefined) error.segment = segment;
   return error;
 }
 

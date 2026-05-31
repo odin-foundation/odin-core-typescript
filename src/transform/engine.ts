@@ -33,6 +33,7 @@ import {
   sourceMissingError,
   transformError,
   transformWarning,
+  danglingBranchError,
   TypeValidationError,
   isModifierCompatible,
   invalidModifierWarning,
@@ -218,14 +219,10 @@ class TransformEngine {
 
         const passSegments = this.transform.segments.filter((s) => (s.pass ?? 0) === passNum);
 
-        for (const segment of passSegments) {
-          this.processSegment(segment, context, output);
-        }
+        this.processSegmentList(passSegments, context, output);
       }
     } else {
-      for (const segment of this.transform.segments) {
-        this.processSegment(segment, context, output);
-      }
+      this.processSegmentList(this.transform.segments, context, output);
     }
 
     // Merge verb-level errors (T011, etc.) into engine errors
@@ -432,18 +429,54 @@ class TransformEngine {
     );
   }
 
+  // Process a list of segments, honoring if/elif/else conditional chains.
+  // A chain is a run of consecutive segments: one `if`, then any `elif`, then
+  // an optional `else`. Only the first branch whose condition holds is emitted.
+  private processSegmentList(
+    segments: TransformSegment[],
+    context: TransformContext,
+    output: Record<string, unknown>
+  ): void {
+    // 'none' = no active chain; 'pending' = chain open, none taken yet; 'taken' = a branch taken
+    let branch: 'none' | 'pending' | 'taken' = 'none';
+
+    for (const segment of segments) {
+      const ifDir = segment.directives.find((d) => d.type === 'if');
+      const elifDir = segment.directives.find((d) => d.type === 'elif');
+      const elseDir = segment.directives.find((d) => d.type === 'else');
+
+      if (ifDir) {
+        const taken = this.evaluateSegmentCondition(ifDir, context);
+        branch = taken ? 'taken' : 'pending';
+        if (taken) this.processSegment(segment, context, output);
+      } else if (elifDir) {
+        if (branch === 'none') {
+          this.errors.push(danglingBranchError('elif', segment.path));
+          continue;
+        }
+        if (branch === 'taken') continue;
+        const taken = this.evaluateSegmentCondition(elifDir, context);
+        branch = taken ? 'taken' : 'pending';
+        if (taken) this.processSegment(segment, context, output);
+      } else if (elseDir) {
+        if (branch === 'none') {
+          this.errors.push(danglingBranchError('else', segment.path));
+          continue;
+        }
+        if (branch === 'pending') this.processSegment(segment, context, output);
+        branch = 'none';
+      } else {
+        branch = 'none';
+        this.processSegment(segment, context, output);
+      }
+    }
+  }
+
   private processSegment(
     segment: TransformSegment,
     context: TransformContext,
     output: Record<string, unknown>
   ): void {
-    const ifDirective = segment.directives.find((d) => d.type === 'if');
-    if (ifDirective && (ifDirective.expr || ifDirective.value)) {
-      if (!this.evaluateSegmentCondition(ifDirective, context)) {
-        return;
-      }
-    }
-
     const loopDirective = segment.directives.find((d) => d.type === 'loop');
     // _from directive provides an alternative loop source path
     const fromDirective = segment.directives.find((d) => d.type === 'from');
