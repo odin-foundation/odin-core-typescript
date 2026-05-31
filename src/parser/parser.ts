@@ -203,6 +203,17 @@ export class Parser {
         continue;
       }
 
+      // Bare segment-directive line (e.g. `:loop vehicles`, `:counter idx`, `:from path`)
+      if (
+        tokenType === TokenType.COLON &&
+        !this.state.tableMode &&
+        !this.state.tabularMode &&
+        this.isBareDirectiveLine()
+      ) {
+        this.parseBareDirective(currentDoc);
+        continue;
+      }
+
       if (this.state.tableMode) {
         if (this.isAssignmentLine()) {
           this.state.tableMode = false;
@@ -697,6 +708,60 @@ export class Parser {
   /**
    * Parse an assignment: path = value
    */
+  // Known segment directives that may be written as a bare `:name args` body line.
+  private static readonly BARE_DIRECTIVES = new Set([
+    'loop',
+    'counter',
+    'from',
+    'if',
+    'elif',
+    'else',
+    'literal',
+  ]);
+
+  // True when the current `:` begins a bare segment-directive line.
+  private isBareDirectiveLine(): boolean {
+    let i = this.pos + 1;
+    while (i < this.tokens.length && this.tokens[i]?.type === TokenType.WHITESPACE) i++;
+    const t = this.tokens[i];
+    return (
+      t?.type === TokenType.IDENTIFIER && Parser.BARE_DIRECTIVES.has(this.getTokenVal(t))
+    );
+  }
+
+  // Parse `:name rest-of-line` into a synthetic `<header>._name = "rest"` assignment,
+  // reusing the existing directive handling (mirrors `_name = "..."`).
+  private parseBareDirective(doc: ParsedDocument): void {
+    this.advance(); // consume :
+    this.skipWs();
+    const name = this.getTokenVal(this.peek());
+    this.advance(); // consume directive name
+    this.skipWs();
+
+    let value = 'true';
+    const t = this.peek();
+    if (t.type !== TokenType.NEWLINE && t.type !== TokenType.EOF && t.type !== TokenType.COMMENT) {
+      const valStart = t.start;
+      let valEnd = valStart;
+      while (
+        !this.isAtEnd() &&
+        this.peek().type !== TokenType.NEWLINE &&
+        this.peek().type !== TokenType.EOF &&
+        this.peek().type !== TokenType.COMMENT
+      ) {
+        if (this.peek().type !== TokenType.WHITESPACE) valEnd = this.peek().end;
+        this.advance();
+      }
+      value = this.source.slice(valStart, valEnd);
+    }
+
+    const fullPath = this.state.headerPath ? `${this.state.headerPath}._${name}` : `_${name}`;
+    if (!this.state.assignedPaths.has(fullPath)) {
+      this.state.assignedPaths.add(fullPath);
+      doc.assignments.set(fullPath, { type: 'string', value });
+    }
+  }
+
   private parseAssignment(doc: ParsedDocument): void {
     const startToken = this.peek();
 
