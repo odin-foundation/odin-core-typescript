@@ -450,6 +450,10 @@ function validateField(ctx: ValidationContext, path: string, fieldSchema: Schema
 
   // Check required
   if (value === undefined) {
+    // Computed fields are produced downstream, not supplied as input
+    if (fieldSchema.computed) {
+      return;
+    }
     if (fieldSchema.required) {
       // Check conditionals
       if (fieldSchema.conditionals.length > 0) {
@@ -462,7 +466,9 @@ function validateField(ctx: ValidationContext, path: string, fieldSchema: Schema
               ? `${parentPath}.${cond.field}`
               : cond.field;
           const condValue = ctx.doc.get(condFieldPath);
-          return matchesConditionValue(condValue, cond.operator, cond.value);
+          const matches = matchesConditionValue(condValue, cond.operator, cond.value);
+          // :unless inverts — field is required when the condition is FALSE
+          return cond.unless ? !matches : matches;
         });
         if (shouldBeRequired) {
           addError(

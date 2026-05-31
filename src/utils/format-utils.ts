@@ -16,15 +16,15 @@ import { uint8ArrayToBase64 } from './security-limits.js';
  * Format modifier prefixes for ODIN notation.
  *
  * Converts an OdinModifiers object into the corresponding ODIN prefix string.
- * Order is significant: ! (required) * (confidential) - (deprecated)
+ * Order is significant: ! (required) - (deprecated) * (confidential)
  *
  * @param modifiers - Modifiers object (may be undefined)
- * @returns Prefix string ("!", "*", "-", or combinations like "!*", "!-", etc.)
+ * @returns Prefix string ("!", "-", "*", or combinations like "!-", "!*", etc.)
  *
  * @example
  * formatModifierPrefix({ required: true }) // "!"
  * formatModifierPrefix({ required: true, confidential: true }) // "!*"
- * formatModifierPrefix({ deprecated: true, confidential: true }) // "*-"
+ * formatModifierPrefix({ deprecated: true, confidential: true }) // "-*"
  * formatModifierPrefix(undefined) // ""
  */
 export function formatModifierPrefix(modifiers?: OdinModifiers): string {
@@ -32,8 +32,8 @@ export function formatModifierPrefix(modifiers?: OdinModifiers): string {
 
   let prefix = '';
   if (modifiers.required) prefix += '!';
-  if (modifiers.confidential) prefix += '*';
   if (modifiers.deprecated) prefix += '-';
+  if (modifiers.confidential) prefix += '*';
   return prefix;
 }
 

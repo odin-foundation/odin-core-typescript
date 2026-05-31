@@ -324,7 +324,7 @@ describe('Canonicalize', () => {
       expect(text).toContain('= -');
     });
 
-    it('orders multiple modifiers: critical, redacted, deprecated', () => {
+    it('orders multiple modifiers: critical, deprecated, redacted', () => {
       // Create document with all modifiers
       const doc = Odin.builder()
         .setWithModifiers('field', 'value', {
@@ -335,8 +335,8 @@ describe('Canonicalize', () => {
         .build();
       const text = new TextDecoder().decode(Odin.canonicalize(doc));
 
-      // Should be: !*- in that order (required, confidential, deprecated)
-      expect(text).toContain('= !*-');
+      // Should be: !-* in that order (required, deprecated, confidential)
+      expect(text).toContain('= !-*');
     });
   });
 

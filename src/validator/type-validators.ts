@@ -109,7 +109,26 @@ registerTypeValidator('string', simpleTypeValidator('string'));
 registerTypeValidator('boolean', simpleTypeValidator('boolean'));
 registerTypeValidator('number', simpleTypeValidator('number'));
 registerTypeValidator('integer', simpleTypeValidator('integer'));
-registerTypeValidator('decimal', simpleTypeValidator('number', 'decimal'));
+registerTypeValidator('decimal', (ctx, value, schemaType) => {
+  if (value.type !== 'number') {
+    ctx.addError('V002', `Type mismatch: expected decimal`, 'decimal', value.type);
+    return;
+  }
+  // Enforce exact decimal places when specified (#.N)
+  if (schemaType.kind === 'decimal' && schemaType.places !== undefined) {
+    const raw = (value as { raw?: string }).raw ?? String(value.value);
+    const dot = raw.indexOf('.');
+    const actualPlaces = dot < 0 ? 0 : raw.length - dot - 1;
+    if (actualPlaces !== schemaType.places) {
+      ctx.addError(
+        'V003',
+        `Decimal places mismatch: expected exactly ${schemaType.places}`,
+        schemaType.places,
+        actualPlaces
+      );
+    }
+  }
+});
 registerTypeValidator('currency', simpleTypeValidator('currency'));
 registerTypeValidator('date', simpleTypeValidator('date'));
 registerTypeValidator('timestamp', simpleTypeValidator('timestamp'));

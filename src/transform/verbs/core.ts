@@ -5,8 +5,22 @@
  * coalesce, ifNull, ifEmpty, ifElse, lookup.
  */
 
-import type { VerbFunction } from '../../types/transform.js';
+import type { VerbFunction, TransformContext } from '../../types/transform.js';
 import { toString, toBoolean, isNull, isEmpty, str, nil } from './helpers.js';
+import { lookupKeyNotFoundError, lookupKeyNotFoundWarning } from '../errors.js';
+
+/**
+ * Report a lookup miss honoring the onMissing policy.
+ * Defaults to silent null; raises only when onMissing is fail/warn.
+ */
+function reportLookupMiss(context: TransformContext, tableName: string, key: string): void {
+  const policy = context.onMissing;
+  if (policy === 'fail') {
+    (context.errors ??= []).push(lookupKeyNotFoundError(tableName, key));
+  } else if (policy === 'warn') {
+    (context.warnings ??= []).push(lookupKeyNotFoundWarning(tableName, key));
+  }
+}
 
 /**
  * %concat @p1 "sep" @p2 ... - Concatenate values
@@ -125,15 +139,22 @@ export const lookup: VerbFunction = (args, context) => {
   const tableName = tableRef.slice(0, dotIndex);
   const returnColumn = tableRef.slice(dotIndex + 1);
 
+  // Get match values
+  const matchValues = args.slice(1).map(toString);
+  const matchKey = matchValues.join(', ');
+
   const table = context.tables.get(tableName);
-  if (!table) return nil();
+  if (!table) {
+    reportLookupMiss(context, tableName, matchKey);
+    return nil();
+  }
 
   // Find the return column index
   const returnColIndex = table.columns.indexOf(returnColumn);
-  if (returnColIndex === -1) return nil();
-
-  // Get match values
-  const matchValues = args.slice(1).map(toString);
+  if (returnColIndex === -1) {
+    reportLookupMiss(context, tableName, matchKey);
+    return nil();
+  }
 
   // Build list of match column indices (all columns except return column)
   const matchColIndices = table.columns
@@ -159,6 +180,7 @@ export const lookup: VerbFunction = (args, context) => {
     }
   }
 
+  reportLookupMiss(context, tableName, matchKey);
   return nil();
 };
 

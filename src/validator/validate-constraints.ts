@@ -134,6 +134,15 @@ export function validateBounds(
     if (constraint.max !== undefined && len > (constraint.max as number)) {
       addError(ctx, path, 'V003', `String length above maximum`, `<= ${constraint.max}`, len);
     }
+  } else if (value.type === 'binary') {
+    // Byte-length bounds for binary values
+    const len = value.data.length;
+    if (constraint.min !== undefined && len < (constraint.min as number)) {
+      addError(ctx, path, 'V003', `Binary size below minimum`, `>= ${constraint.min}`, len);
+    }
+    if (constraint.max !== undefined && len > (constraint.max as number)) {
+      addError(ctx, path, 'V003', `Binary size above maximum`, `<= ${constraint.max}`, len);
+    }
   } else if (value.type === 'date' || value.type === 'timestamp') {
     // Date bounds
     const dateValue = value.value;

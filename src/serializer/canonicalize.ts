@@ -69,16 +69,16 @@ function formatCanonicalValue(value: OdinValue): string {
       return formatCanonicalString(value.value);
 
     case 'number':
-      // Canonical form always strips trailing zeros (don't use raw)
-      return `#${formatCanonicalNumberValue(value.value)}`;
+      // Prefer raw to preserve precision beyond JS number range
+      return `#${value.raw !== undefined ? formatCanonicalNumberValue(value.raw) : formatCanonicalNumberValue(value.value)}`;
 
     case 'integer':
-      return `##${value.value}`;
+      // Prefer raw to preserve integers beyond JS safe range
+      return `##${value.raw !== undefined ? value.raw : value.value}`;
 
     case 'currency': {
-      // Canonical form: currency always has exactly 2 decimal places
-      const dp = Math.max(value.decimalPlaces, 2);
-      const currencyValue = `#$${value.value.toFixed(dp)}`;
+      // Canonical form: currency always has at least 2 decimal places
+      const currencyValue = `#$${formatCanonicalCurrencyValue(value)}`;
       // Append currency code if present (uppercase in canonical form)
       return value.currencyCode
         ? `${currencyValue}:${value.currencyCode.toUpperCase()}`
@@ -190,18 +190,44 @@ function formatCanonicalString(value: string): string {
  * Format a number value in canonical form.
  * Uses minimal representation - removes unnecessary trailing zeros.
  */
-function formatCanonicalNumberValue(value: number): string {
-  if (!Number.isFinite(value)) {
-    throw new Error('Non-finite numbers cannot be canonicalized');
+function formatCanonicalNumberValue(value: number | string): string {
+  let str: string;
+  if (typeof value === 'string') {
+    str = value;
+  } else {
+    if (!Number.isFinite(value)) {
+      throw new Error('Non-finite numbers cannot be canonicalized');
+    }
+    str = String(value);
   }
-
-  const str = String(value);
 
   if (str.includes('.') && !str.includes('e') && !str.includes('E')) {
     return str.replace(/\.?0+$/, '');
   }
 
   return str;
+}
+
+/**
+ * Format a currency value in canonical form: at least 2 decimal places.
+ * Prefers raw to preserve precision and integer parts beyond JS safe range.
+ */
+function formatCanonicalCurrencyValue(value: {
+  value: number;
+  decimalPlaces: number;
+  raw?: string;
+}): string {
+  if (value.raw !== undefined) {
+    const negative = value.raw.startsWith('-');
+    const unsigned = negative ? value.raw.slice(1) : value.raw;
+    const dotIndex = unsigned.indexOf('.');
+    const intPart = dotIndex < 0 ? unsigned : unsigned.slice(0, dotIndex);
+    const fracPart = dotIndex < 0 ? '' : unsigned.slice(dotIndex + 1);
+    const paddedFrac = fracPart.length < 2 ? fracPart.padEnd(2, '0') : fracPart;
+    return `${negative ? '-' : ''}${intPart}.${paddedFrac}`;
+  }
+  const dp = Math.max(value.decimalPlaces, 2);
+  return value.value.toFixed(dp);
 }
 
 /**

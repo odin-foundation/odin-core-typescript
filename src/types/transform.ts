@@ -463,6 +463,15 @@ export interface TransformContext {
 
   /** Errors collected by verbs (T011, etc.) — merged into TransformResult.errors */
   errors?: TransformError[];
+
+  /** Warnings collected by verbs — merged into TransformResult.warnings */
+  warnings?: TransformWarning[];
+
+  /** Error-handling policy for verb-level failures (defaults to 'fail') */
+  onError?: 'fail' | 'warn' | 'skip' | undefined;
+
+  /** Missing-data policy for lookup/source misses (defaults to silent null) */
+  onMissing?: 'fail' | 'warn' | 'skip' | 'default' | undefined;
 }
 
 /**

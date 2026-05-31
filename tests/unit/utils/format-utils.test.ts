@@ -54,20 +54,20 @@ describe('formatModifierPrefix', () => {
     expect(formatModifierPrefix({ required: true, deprecated: true })).toBe('!-');
   });
 
-  it('returns "*-" for confidential and deprecated', () => {
-    expect(formatModifierPrefix({ confidential: true, deprecated: true })).toBe('*-');
+  it('returns "-*" for deprecated and confidential', () => {
+    expect(formatModifierPrefix({ confidential: true, deprecated: true })).toBe('-*');
   });
 
-  it('returns "!*-" for all three modifiers', () => {
+  it('returns "!-*" for all three modifiers', () => {
     expect(formatModifierPrefix({ required: true, confidential: true, deprecated: true })).toBe(
-      '!*-'
+      '!-*'
     );
   });
 
   it('preserves correct order regardless of input object order', () => {
-    // Even if deprecated is listed first, output should still be !*-
+    // Even if deprecated is listed first, output should still be !-*
     expect(formatModifierPrefix({ deprecated: true, required: true, confidential: true })).toBe(
-      '!*-'
+      '!-*'
     );
   });
 });

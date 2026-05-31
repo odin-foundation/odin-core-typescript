@@ -237,6 +237,9 @@ class TransformEngine {
     if (context.errors && context.errors.length > 0) {
       this.errors.push(...context.errors);
     }
+    if (context.warnings && context.warnings.length > 0) {
+      this.warnings.push(...context.warnings);
+    }
 
     const formatted = formatOutput(output as Record<string, TransformValue>, {
       transform: this.transform,
@@ -323,9 +326,10 @@ class TransformEngine {
       const segment = segmentMap.get(discValue);
       if (!segment) {
         // Handle unknown record type
-        if (this.transform.target.onError === 'fail') {
+        const onError = this.transform.target.onError ?? 'fail';
+        if (onError === 'fail') {
           this.errors.push(unknownRecordTypeError(discValue, recordIndex + 1));
-        } else if (this.transform.target.onError === 'warn') {
+        } else if (onError === 'warn') {
           this.warnings.push(unknownRecordTypeWarning(discValue, recordIndex + 1));
         }
         continue;
@@ -353,6 +357,9 @@ class TransformEngine {
       // Merge verb-level errors from this record's context
       if (context.errors && context.errors.length > 0) {
         this.errors.push(...context.errors);
+      }
+      if (context.warnings && context.warnings.length > 0) {
+        this.warnings.push(...context.warnings);
       }
 
       // Merge into output
@@ -414,6 +421,9 @@ class TransformEngine {
       loopDepth: 0,
       verbRegistry: this.verbRegistry,
       errors: [],
+      warnings: [],
+      onError: this.transform.target.onError ?? 'fail',
+      onMissing: this.transform.target.onMissing,
     };
 
     // Only set sourceOdinDoc if provided (exactOptionalPropertyTypes compliance)
@@ -637,6 +647,10 @@ class TransformEngine {
 
       const objectModifier = mapping.modifiers.find((m) => m.name === 'object');
 
+      // A :default modifier handles a missing lookup; suppress errors raised during evaluation.
+      const hasDefaultModifier = mapping.modifiers.some((m) => m.name === 'default');
+      const errorsBefore = hasDefaultModifier ? (context.errors?.length ?? 0) : 0;
+
       let value = objectModifier
         ? this.buildInlineObject(String(objectModifier.value), context)
         : this.evaluateExpression(mapping.value, context);
@@ -644,6 +658,11 @@ class TransformEngine {
       value = applyModifiers(value, mapping.modifiers, context, (path, ctx) =>
         this.resolvePathValue(path, ctx)
       );
+
+      // If a :default rescued a null result, drop errors raised during evaluation.
+      if (hasDefaultModifier && context.errors && context.errors.length > errorsBefore) {
+        context.errors.length = errorsBefore;
+      }
 
       // Validation modifiers: :validate, :enum, :range (honors onValidation policy)
       if (!this.validateFieldValue(value, mapping)) return;
@@ -718,9 +737,10 @@ class TransformEngine {
       }
 
       const message = err instanceof Error ? err.message : String(err);
-      if (this.transform.target.onError === 'fail') {
+      const onError = this.transform.target.onError ?? 'fail';
+      if (onError === 'fail') {
         this.errors.push(transformError(message, mapping.target));
-      } else if (this.transform.target.onError === 'warn') {
+      } else if (onError === 'warn') {
         this.warnings.push(transformWarning(message, mapping.target));
       }
       // skip: do nothing
@@ -892,7 +912,13 @@ class TransformEngine {
           : this.verbRegistry.get(expr.verb);
 
         if (!verbFn) {
-          // T001: Unknown verb
+          // Unregistered custom verbs are an SDK extension point: echo the
+          // first argument rather than failing the transform.
+          if (expr.isCustom) {
+            const customArgs = expr.args.map((arg) => this.evaluateExpression(arg, context));
+            return customArgs[0] ?? { type: 'null' };
+          }
+          // T001: Unknown built-in verb
           const err = unknownVerbError(expr.verb);
           throw new Error(err.message);
         }

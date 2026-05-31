@@ -636,6 +636,28 @@ status = "active"
       expect(result.errors[0]?.code).toBe('SOURCE_MISSING');
     });
 
+    it('fails on transform errors when onError is unset (defaults to fail)', () => {
+      const transform = createTransform([
+        {
+          path: 'result',
+          isArray: false,
+          directives: [],
+          mappings: [
+            {
+              target: 'out',
+              value: verb('thisVerbDoesNotExist', copy('x')),
+              modifiers: [],
+            },
+          ],
+        },
+      ]);
+
+      const result = executeTransform(transform, { x: 'value' });
+
+      expect(result.success).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
     it('skips errors when onError is skip', () => {
       const transform = createTransform(
         [
