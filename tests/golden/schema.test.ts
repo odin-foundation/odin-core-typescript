@@ -21,6 +21,8 @@ interface GoldenSchemaTest {
   input?: string;
   schema?: string;
   expected?: Record<string, unknown>;
+  /** When true, assert the parsed structure (types, type fields, root fields) against expected. */
+  structural?: boolean;
   expectError?: {
     code: string;
     message?: string;
@@ -76,6 +78,31 @@ function runSchemaTest(test: GoldenSchemaTest) {
   } else {
     const schema = Odin.parseSchema(inputText);
     expect(schema).toBeDefined();
+
+    const expected = test.expected;
+    if (!test.structural || !expected) return;
+
+    // Expected types must exist; their declared fields must be present on the type.
+    const expectedTypes = expected.types as Record<string, { fields?: Record<string, unknown> }> | undefined;
+    if (expectedTypes) {
+      for (const [typeName, typeDef] of Object.entries(expectedTypes)) {
+        const type = schema.types.get(typeName);
+        expect(type, `type '${typeName}' should be defined`).toBeDefined();
+        if (typeDef?.fields) {
+          for (const fieldKey of Object.keys(typeDef.fields)) {
+            expect(type!.fields.has(fieldKey), `type '${typeName}' should have field '${fieldKey}'`).toBe(true);
+          }
+        }
+      }
+    }
+
+    // Expected top-level fields must exist on the schema root.
+    const expectedFields = expected.fields as Record<string, unknown> | undefined;
+    if (expectedFields) {
+      for (const fieldPath of Object.keys(expectedFields)) {
+        expect(schema.fields.has(fieldPath), `schema should have root field '${fieldPath}'`).toBe(true);
+      }
+    }
   }
 }
 

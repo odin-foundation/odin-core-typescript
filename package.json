@@ -1,6 +1,6 @@
 {
   "name": "@odin-foundation/core",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Official TypeScript implementation of ODIN (Open Data Interchange Notation)",
   "type": "module",
   "main": "dist/cjs/index.cjs",
@@ -28,7 +28,8 @@
     "build": "npm run build:esm && npm run build:cjs && npm run build:types",
     "build:esm": "tsc -p tsconfig.esm.json",
     "build:cjs": "tsc -p tsconfig.cjs.json",
-    "build:types": "tsc -p tsconfig.types.json",
+    "build:types": "tsc -p tsconfig.types.json && npm run build:types:cjs",
+    "build:types:cjs": "node -e \"require('fs').copyFileSync('dist/types/index.d.ts','dist/types/index.d.cts')\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:golden": "vitest run --config vitest.golden.config.ts",

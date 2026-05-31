@@ -24,6 +24,8 @@ export interface HeaderParseResult {
   isContinuation?: boolean;
   /** For array headers: the column names */
   columns?: string[];
+  /** Whether this is a relative header ({.sub}) resolving against the last absolute context */
+  isRelative?: boolean;
 }
 
 /**
@@ -180,6 +182,8 @@ function parseTypeDefinitionHeader(
  * Parse object or array path header: {path}, {path[]}, {path[] : col1, col2}
  */
 function parsePathHeader(reader: SchemaTokenReader): HeaderParseResult {
+  // Leading dot marks a relative header ({.sub}) that nests under the last absolute context.
+  const isRelative = reader.peek().type === TokenType.DOT;
   const pathParts: string[] = [];
 
   while (
@@ -239,6 +243,7 @@ function parsePathHeader(reader: SchemaTokenReader): HeaderParseResult {
     const result: HeaderParseResult = {
       header,
       path: basePath,
+      isRelative,
     };
     if (columns !== undefined) {
       result.columns = columns;
@@ -249,6 +254,7 @@ function parsePathHeader(reader: SchemaTokenReader): HeaderParseResult {
   return {
     header: { kind: 'object', path: basePath },
     path: basePath,
+    isRelative,
   };
 }
 

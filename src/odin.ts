@@ -46,6 +46,7 @@ import {
 import { stringify } from './serializer/stringify.js';
 import { canonicalize } from './serializer/canonicalize.js';
 import { validate as runValidation } from './validator/validate.js';
+import type { TypeRegistry } from './resolver/type-registry.js';
 import { formatModifierAttributes } from './utils/format-utils.js';
 import { parseSchema as runParseSchema } from './validator/schema-parser.js';
 import { diff as computeDiff } from './diff/diff.js';
@@ -197,6 +198,7 @@ export class Odin {
    * @param doc - Document to validate
    * @param schema - Schema to validate against
    * @param options - Validation options
+   * @param typeRegistry - Optional registry of imported types (from resolveSchemaFile)
    * @returns Validation result with errors and warnings
    *
    * @example
@@ -210,9 +212,10 @@ export class Odin {
   static validate(
     doc: OdinDocument,
     schema: OdinSchema,
-    options?: ValidateOptions
+    options?: ValidateOptions,
+    typeRegistry?: TypeRegistry
   ): ValidationResult {
-    return runValidation(doc, schema, options);
+    return runValidation(doc, schema, options, typeRegistry);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

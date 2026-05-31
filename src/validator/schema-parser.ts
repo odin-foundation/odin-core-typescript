@@ -65,6 +65,12 @@ class SchemaParser {
   private currentTypeFields: Map<string, SchemaField> = new Map();
   private currentTypeName: string = '';
 
+  // Relative-header context: last absolute header, and the sub-path of the current
+  // relative header within its parent type (e.g. 'term' for {.term} inside {@policy}).
+  private previousHeaderPath: string = '';
+  private previousHeaderType: string = '';
+  private currentTypeSubPath: string = '';
+
   // Current array being built
   private currentArrayFields: Map<string, SchemaField> = new Map();
   private currentArrayPath: string = '';
@@ -94,6 +100,9 @@ class SchemaParser {
     this.currentArrayFields = new Map();
     this.currentArrayPath = '';
     this.currentArrayColumns = undefined;
+    this.previousHeaderPath = '';
+    this.previousHeaderType = '';
+    this.currentTypeSubPath = '';
 
     while (!this.isAtEnd()) {
       const token = this.peek();
@@ -214,6 +223,29 @@ class SchemaParser {
   private parseSchemaHeader(): void {
     const result = parseSchemaHeaderImpl(this.reader, this.state.definedTypes);
 
+    // Relative header ({.sub}): nest under the last absolute context, not the schema root.
+    if (result.isRelative) {
+      if (this.previousHeaderType) {
+        // Re-open the parent type and route fields under the sub-path (e.g. policy.term.*).
+        this.currentTypeName = this.previousHeaderType;
+        const existingType = this.types.get(this.previousHeaderType);
+        this.currentTypeFields = existingType ? new Map(existingType.fields) : new Map();
+        this.state.currentHeader = { kind: 'typeDefinition', name: this.previousHeaderType };
+        this.currentTypeSubPath = result.path;
+        this.state.currentPath = result.path;
+      } else {
+        // Object context: relative headers are siblings under the last absolute path.
+        this.currentTypeSubPath = '';
+        const full = this.previousHeaderPath ? `${this.previousHeaderPath}.${result.path}` : result.path;
+        this.state.currentHeader = { kind: 'object', path: full };
+        this.state.currentPath = full;
+      }
+      return;
+    }
+
+    // Absolute header resets the relative sub-path context.
+    this.currentTypeSubPath = '';
+
     // Apply header result to state
     this.state.currentHeader = result.header;
     this.state.currentPath = result.path;
@@ -222,6 +254,8 @@ class SchemaParser {
     if (result.typeName !== undefined) {
       this.state.definedTypes.add(result.typeName);
       this.currentTypeName = result.typeName;
+      this.previousHeaderType = result.typeName;
+      this.previousHeaderPath = '';
 
       // For continuation blocks, preserve existing fields from the type
       if (result.isContinuation && this.types.has(result.typeName)) {
@@ -230,6 +264,9 @@ class SchemaParser {
       } else {
         this.currentTypeFields = new Map();
       }
+    } else if (result.header?.kind === 'object' || result.header?.kind === 'array') {
+      this.previousHeaderPath = result.path;
+      this.previousHeaderType = '';
     }
 
     // Handle array header specific state
@@ -418,8 +455,9 @@ class SchemaParser {
     } else if (header?.kind === 'derivation') {
       // Derivation metadata - skip for now
     } else if (header?.kind === 'typeDefinition') {
-      // Type definition field
-      this.currentTypeFields.set(fieldPath, fieldSpec);
+      // Type definition field (prefixed when inside a relative sub-section like {.term})
+      const key = this.currentTypeSubPath ? `${this.currentTypeSubPath}.${fieldPath}` : fieldPath;
+      this.currentTypeFields.set(key, fieldSpec);
     } else if (header?.kind === 'array') {
       // Array item field
       this.currentArrayFields.set(fieldPath, fieldSpec);

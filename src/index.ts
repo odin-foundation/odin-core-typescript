@@ -211,3 +211,18 @@ export type {
   FormElement,
   RenderFormOptions,
 } from './forms/index.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Schema Validation
+// ─────────────────────────────────────────────────────────────────────────────
+
+export * from './validator/index.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Import Resolution (resolveSchemaFile, TypeRegistry, flattener, ...)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export * from './resolver/index.js';
+
+// Validate a document against a schema that uses @import.
+export { validateWithImports } from './validate-with-imports.js';
