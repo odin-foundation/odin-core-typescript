@@ -474,9 +474,21 @@ describe('Collection Verbs', () => {
 
   describe('toObject', () => {
     it('converts array of [key, value] pairs', () => {
-      const pairs = arr([arr([str('a'), int(1)]), arr([str('b'), int(2)])]);
+      const pairs = arr([arr([str('x'), int(1)]), arr([str('y'), int(2)])]);
       const result = callVerb('toObject', [pairs]);
       expect(result.type).toBe('object');
+      if (result.type === 'object') {
+        expect(result.value).toEqual({ x: 1, y: 2 });
+      }
+    });
+
+    it('converts array of {key, value} objects', () => {
+      const kvs = arr([obj({ key: 'a', value: 1 }), obj({ key: 'b', value: 2 })]);
+      const result = callVerb('toObject', [kvs]);
+      expect(result.type).toBe('object');
+      if (result.type === 'object') {
+        expect(result.value).toEqual({ a: 1, b: 2 });
+      }
     });
 
     it('returns null for non-array input', () => {
@@ -488,6 +500,62 @@ describe('Collection Verbs', () => {
       const result = callVerb('toObject', []);
       expect(result.type).toBe('null');
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Business Date / Duration Verbs
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('nextBusinessDay', () => {
+  it('advances a weekday to the next weekday', () => {
+    // 2024-01-17 is Wednesday
+    expect(callVerbString('nextBusinessDay', [str('2024-01-17')])).toBe('2024-01-18');
+  });
+
+  it('advances Friday to Monday', () => {
+    // 2024-01-19 is Friday
+    expect(callVerbString('nextBusinessDay', [str('2024-01-19')])).toBe('2024-01-22');
+  });
+
+  it('advances Saturday to Monday', () => {
+    // 2024-01-20 is Saturday
+    expect(callVerbString('nextBusinessDay', [str('2024-01-20')])).toBe('2024-01-22');
+  });
+
+  it('advances Sunday to Monday', () => {
+    // 2024-01-21 is Sunday
+    expect(callVerbString('nextBusinessDay', [str('2024-01-21')])).toBe('2024-01-22');
+  });
+
+  it('returns null for empty args', () => {
+    expect(callVerb('nextBusinessDay', []).type).toBe('null');
+  });
+});
+
+describe('formatDuration', () => {
+  it('formats an ISO 8601 duration string', () => {
+    expect(callVerbString('formatDuration', [str('PT2H30M')])).toBe('2 hours, 30 minutes');
+  });
+
+  it('formats a number of seconds', () => {
+    expect(callVerbString('formatDuration', [int(90061)])).toBe(
+      '1 day, 1 hour, 1 minute, 1 second'
+    );
+  });
+
+  it('formats a sub-day number of seconds', () => {
+    expect(callVerbString('formatDuration', [int(3661)])).toBe('1 hour, 1 minute, 1 second');
+  });
+
+  it('formats numeric seconds passed as a string', () => {
+    expect(callVerbString('formatDuration', [str('90061')])).toBe(
+      '1 day, 1 hour, 1 minute, 1 second'
+    );
+  });
+
+  it('returns null for empty args', () => {
+    expect(callVerb('formatDuration', []).type).toBe('null');
   });
 });
 

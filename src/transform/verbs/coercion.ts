@@ -455,33 +455,87 @@ export const toObject: VerbFunction = (args) => {
   const result: Record<string, unknown> = {};
 
   for (const item of items) {
-    if (Array.isArray(item) && item.length >= 2) {
-      // [key, value] pair
-      const key = String(item[0]);
-      result[key] = item[1];
-    } else if (item && typeof item === 'object' && !Array.isArray(item)) {
-      const obj = item as Record<string, unknown>;
-
-      // Check for CDM typed value structure
-      if ('type' in obj && obj.type === 'object' && 'value' in obj) {
-        const inner = obj.value as Record<string, unknown>;
-        if ('key' in inner && 'value' in inner) {
-          const key = String(inner.key);
-          result[key] = inner.value;
-          continue;
-        }
-      }
-
-      // {key, value} or {k, v} structure
-      if ('key' in obj && 'value' in obj) {
-        const key = String(obj.key);
-        result[key] = obj.value;
-      } else if ('k' in obj && 'v' in obj) {
-        const key = String(obj.k);
-        result[key] = obj.v;
-      }
+    const pair = extractPair(item);
+    if (pair) {
+      result[pair.key] = pair.value;
     }
   }
 
   return { type: 'object' as const, value: result };
+}
+
+/**
+ * Unwrap a CDM typed value to a plain JS value; pass through raw values.
+ */
+function unwrapValue(item: unknown): unknown {
+  if (item && typeof item === 'object' && 'type' in item) {
+    const tv = item as Record<string, unknown>;
+    switch (tv.type) {
+      case 'null':
+        return null;
+      case 'string':
+      case 'boolean':
+      case 'integer':
+      case 'number':
+      case 'currency':
+      case 'percent':
+      case 'time':
+      case 'duration':
+        return tv.value;
+      case 'reference':
+        return tv.path;
+      case 'object':
+        return tv.value;
+      case 'array':
+        return tv.items;
+    }
+  }
+  return item;
+}
+
+/**
+ * Extract a {key, value} pair from an entry in either pair-array or
+ * key/value-object form. Entries may be raw JS or CDM typed values.
+ */
+function extractPair(item: unknown): { key: string; value: unknown } | null {
+  // CDM array wrapper: { type: 'array', items: [key, value] }
+  if (item && typeof item === 'object' && 'type' in item) {
+    const tv = item as Record<string, unknown>;
+    if (tv.type === 'array' && Array.isArray(tv.items)) {
+      const pairItems = tv.items as unknown[];
+      if (pairItems.length >= 2) {
+        return { key: String(unwrapValue(pairItems[0])), value: unwrapValue(pairItems[1]) };
+      }
+      return null;
+    }
+    // CDM object wrapper: { type: 'object', value: { key, value } }
+    if (tv.type === 'object' && tv.value && typeof tv.value === 'object') {
+      const inner = tv.value as Record<string, unknown>;
+      if ('key' in inner && 'value' in inner) {
+        return { key: String(unwrapValue(inner.key)), value: unwrapValue(inner.value) };
+      }
+      if ('k' in inner && 'v' in inner) {
+        return { key: String(unwrapValue(inner.k)), value: unwrapValue(inner.v) };
+      }
+      return null;
+    }
+  }
+
+  // Raw JS [key, value] pair
+  if (Array.isArray(item) && item.length >= 2) {
+    return { key: String(unwrapValue(item[0])), value: unwrapValue(item[1]) };
+  }
+
+  // Raw JS {key, value} or {k, v} object
+  if (item && typeof item === 'object' && !Array.isArray(item)) {
+    const obj = item as Record<string, unknown>;
+    if ('key' in obj && 'value' in obj) {
+      return { key: String(unwrapValue(obj.key)), value: unwrapValue(obj.value) };
+    }
+    if ('k' in obj && 'v' in obj) {
+      return { key: String(unwrapValue(obj.k)), value: unwrapValue(obj.v) };
+    }
+  }
+
+  return null;
 };

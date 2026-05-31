@@ -908,13 +908,13 @@ export const businessDays: VerbFunction = (args) => {
 };
 
 /**
- * %nextBusinessDay @date - Next weekday (Mon-Fri)
+ * %nextBusinessDay @date - Next Mon-Fri date strictly after the input
  *
- * If already Mon-Fri, returns same date. Sat→Mon, Sun→Mon.
+ * Always advances at least one day. Fri→Mon, Wed→Thu, Sat→Mon, Sun→Mon.
  *
  * @example
  * effective = "%nextBusinessDay @.submittedDate"
- * ; 2024-01-20 (Sat) → 2024-01-22 (Mon)
+ * ; 2024-01-19 (Fri) → 2024-01-22 (Mon)
  */
 export const nextBusinessDay: VerbFunction = (args) => {
   if (args.length === 0) return nil();
@@ -923,47 +923,79 @@ export const nextBusinessDay: VerbFunction = (args) => {
   if (!date) return nil();
 
   const result = new Date(date);
-  const dow = result.getUTCDay();
-
-  if (dow === 0) {
-    // Sunday → Monday
+  do {
     result.setUTCDate(result.getUTCDate() + 1);
-  } else if (dow === 6) {
-    // Saturday → Monday
-    result.setUTCDate(result.getUTCDate() + 2);
-  }
+  } while (result.getUTCDay() === 0 || result.getUTCDay() === 6);
 
   return str(formatDateOnlyUtil(result));
 };
 
 /**
- * %formatDuration @duration - Human-readable duration from ISO 8601
+ * %formatDuration @duration - Human-readable duration
  *
- * Converts ISO 8601 duration string to English comma-separated components.
- * Zero components are omitted. Singular/plural handled.
+ * Accepts an ISO 8601 duration string (e.g. "PT2H30M") or a number of
+ * seconds (e.g. 90061). Numeric seconds expand into days, hours, minutes,
+ * and seconds. Output is English comma-separated components; zero components
+ * are omitted and singular/plural is handled.
  *
  * @example
  * readable = "%formatDuration @.elapsed"
  * ; "PT2H30M" → "2 hours, 30 minutes"
  * ; "P1DT6H" → "1 day, 6 hours"
- * ; "PT45S" → "45 seconds"
+ * ; 90061 → "1 day, 1 hour, 1 minute, 1 second"
  */
 export const formatDuration: VerbFunction = (args) => {
   if (args.length === 0) return nil();
 
-  const input = toString(args[0]!);
-  if (!input) return nil();
+  const arg = args[0]!;
 
-  // Parse ISO 8601 duration: P[nY][nM][nD][T[nH][nM][nS]]
-  const match = /^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(input);
-  if (!match) return nil();
+  let years = 0;
+  let months = 0;
+  let days = 0;
+  let hours = 0;
+  let minutes = 0;
+  let seconds = 0;
 
-  const years = parseInt(match[1] || '0', 10);
-  const months = parseInt(match[2] || '0', 10);
-  const days = parseInt(match[3] || '0', 10);
-  const hours = parseInt(match[4] || '0', 10);
-  const minutes = parseInt(match[5] || '0', 10);
-  const seconds = parseFloat(match[6] || '0');
+  if (
+    arg.type === 'integer' ||
+    arg.type === 'number' ||
+    arg.type === 'currency' ||
+    arg.type === 'percent'
+  ) {
+    // Numeric seconds: expand into days/hours/minutes/seconds
+    let total = arg.value;
+    if (!Number.isFinite(total) || total < 0) return nil();
+    days = Math.floor(total / 86400);
+    total -= days * 86400;
+    hours = Math.floor(total / 3600);
+    total -= hours * 3600;
+    minutes = Math.floor(total / 60);
+    seconds = total - minutes * 60;
+  } else {
+    const input = toString(arg);
+    if (!input) return nil();
+
+    // Numeric seconds passed as a string
+    if (/^\d+(?:\.\d+)?$/.test(input)) {
+      let total = parseFloat(input);
+      days = Math.floor(total / 86400);
+      total -= days * 86400;
+      hours = Math.floor(total / 3600);
+      total -= hours * 3600;
+      minutes = Math.floor(total / 60);
+      seconds = total - minutes * 60;
+    } else {
+      // Parse ISO 8601 duration: P[nY][nM][nD][T[nH][nM][nS]]
+      const match = /^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(input);
+      if (!match) return nil();
+      years = parseInt(match[1] || '0', 10);
+      months = parseInt(match[2] || '0', 10);
+      days = parseInt(match[3] || '0', 10);
+      hours = parseInt(match[4] || '0', 10);
+      minutes = parseInt(match[5] || '0', 10);
+      seconds = parseFloat(match[6] || '0');
+    }
+  }
 
   const parts: string[] = [];
   if (years > 0) parts.push(`${years} ${years === 1 ? 'year' : 'years'}`);
