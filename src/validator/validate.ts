@@ -151,15 +151,17 @@ function expandTypeCompositions(ctx: ValidationContext): Map<string, SchemaField
       const allowOverride = field.type.override === true;
       overrideByPath.set(parentPath, allowOverride);
 
-      // Get the type definition - use lookupType to support imported types
-      const typeDef = lookupType(ctx, field.type.name);
-      if (typeDef) {
-        // Add all fields from the type definition with the parent path prefix
-        for (const [fieldName, typeField] of typeDef.fields) {
-          if (fieldName === '_composition') continue;
-          const fullPath = `${parentPath}.${fieldName}`;
-          // Clone the field with the new path
-          result.set(fullPath, { ...typeField, path: fullPath });
+      // An intersection (`@a & @b`) is stored as an `&`-joined name; merge the
+      // fields of every referenced type under the parent path.
+      const memberNames = field.type.name.split('&').map((n) => n.trim()).filter((n) => n.length > 0);
+      for (const memberName of memberNames) {
+        const typeDef = lookupType(ctx, memberName);
+        if (typeDef) {
+          for (const [fieldName, typeField] of typeDef.fields) {
+            if (fieldName === '_composition') continue;
+            const fullPath = `${parentPath}.${fieldName}`;
+            result.set(fullPath, { ...typeField, path: fullPath });
+          }
         }
       }
     }
@@ -200,7 +202,50 @@ function expandTypeCompositions(ctx: ValidationContext): Map<string, SchemaField
     result.set(path, field);
   }
 
+  // Third pass: a field typed as `@SomeType` (typeRef or a reference resolving to
+  // a defined type) enforces that type's fields under the field path, like header
+  // composition. Only applied when the sub-object is present or the field is required.
+  for (const [path, field] of [...result]) {
+    if (path.endsWith('._composition')) continue;
+
+    const refName =
+      field.type.kind === 'typeRef' ? field.type.name :
+      field.type.kind === 'reference' ? field.type.targetPath :
+      undefined;
+    if (!refName) continue;
+
+    const memberNames = refName.split('&').map((n) => n.trim()).filter((n) => n.length > 0);
+    const typeDefs = memberNames.map((n) => lookupType(ctx, n)).filter((t): t is SchemaType => !!t);
+    if (typeDefs.length === 0) continue; // not a defined type -> runtime reference, skip
+
+    const present = isObjectPresent(ctx, path);
+    if (!present && !field.required) continue;
+
+    for (const typeDef of typeDefs) {
+      for (const [fieldName, typeField] of typeDef.fields) {
+        if (fieldName === '_composition') continue;
+        const fullPath = `${path}.${fieldName}`;
+        if (!result.has(fullPath)) {
+          result.set(fullPath, { ...typeField, path: fullPath });
+        }
+      }
+    }
+  }
+
   return result;
+}
+
+/**
+ * Determine whether an object at the given path is present in the document,
+ * i.e. the path itself or any descendant path holds a value.
+ */
+function isObjectPresent(ctx: ValidationContext, path: string): boolean {
+  if (ctx.doc.get(path) !== undefined) return true;
+  const prefix = `${path}.`;
+  for (const p of ctx.doc.paths()) {
+    if (p.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 /**
@@ -324,16 +369,21 @@ function validateSchemaTypeReferences(ctx: ValidationContext): void {
         ? field.type.name
         : (field.type as { targetPath?: string }).targetPath;
       if (targetName) {
-        const typeDef = lookupType(ctx, targetName);
-        if (!typeDef) {
-          addError(
-            ctx,
-            path,
-            'V013',
-            `Unresolved type reference: @${targetName}`,
-            'defined type',
-            `@${targetName}`
-          );
+        // An intersection typeRef carries multiple `&`-joined member names.
+        const memberNames = field.type.kind === 'typeRef'
+          ? targetName.split('&').map((n) => n.trim()).filter((n) => n.length > 0)
+          : [targetName];
+        for (const memberName of memberNames) {
+          if (!lookupType(ctx, memberName)) {
+            addError(
+              ctx,
+              path,
+              'V013',
+              `Unresolved type reference: @${memberName}`,
+              'defined type',
+              `@${memberName}`
+            );
+          }
         }
       }
     }
@@ -432,9 +482,12 @@ function validateField(ctx: ValidationContext, path: string, fieldSchema: Schema
     return;
   }
 
-  // Check nullable
+  // Check nullable (a union with a null member also permits null)
   if (value.type === 'null') {
-    if (!fieldSchema.nullable) {
+    const unionAllowsNull =
+      fieldSchema.type.kind === 'union' &&
+      fieldSchema.type.types.some((t) => t.kind === 'null');
+    if (!fieldSchema.nullable && !unionAllowsNull) {
       addError(ctx, path, 'V002', `Field ${path} cannot be null`, 'non-null value', 'null');
     }
     return;

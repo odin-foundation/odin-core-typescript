@@ -18,6 +18,7 @@ import type { SchemaTokenReader } from './schema-token-reader.js';
 export interface BoundsParseResult {
   constraint: SchemaConstraint | null;
   pendingConditional?: string;
+  pendingDefault?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -92,11 +93,11 @@ export function parseConstraints(
 
   // Pattern constraint :/regex/ or :|regex|
   if (val.length > 0 && '/|#~'.includes(val[0]!)) {
-    const constraint = parsePatternConstraint(reader, val[0]!);
-    if (constraint) {
-      field.constraints.push(constraint);
+    const result = parsePatternConstraint(reader, val[0]!);
+    if (result.constraint) {
+      field.constraints.push(result.constraint);
     }
-    return undefined;
+    return result.pendingConditional;
   }
 
   // Bounds constraint (min..max) - val could be "(3..10)" or just "("
@@ -104,6 +105,9 @@ export function parseConstraints(
     const result = parseBoundsConstraint(reader);
     if (result.constraint) {
       field.constraints.push(result.constraint);
+    }
+    if (result.pendingDefault) {
+      field.pendingDefault = result.pendingDefault;
     }
     return result.pendingConditional;
   }
@@ -122,7 +126,7 @@ export function parseConstraints(
 export function parsePatternConstraint(
   reader: SchemaTokenReader,
   delimiter: string
-): SchemaConstraint | null {
+): { constraint: SchemaConstraint | null; pendingConditional?: string } {
   const token = reader.peek();
   const source = reader.getSource();
 
@@ -130,19 +134,31 @@ export function parsePatternConstraint(
   // We need to find the closing delimiter in the raw source text
   const patternStart = token.start + 1; // skip opening delimiter character
 
-  // Find the closing delimiter in the source, searching from patternStart
-  // We need to find the LAST occurrence of the delimiter on this line
+  // Find the closing delimiter in the source, searching from patternStart.
+  // A trailing :if/:unless conditional may follow the closing delimiter, so
+  // bound the search to before any such directive to find the true closer.
   const lineEnd = source.indexOf('\n', patternStart);
   const searchEnd = lineEnd === -1 ? source.length : lineEnd;
   const lineSlice = source.substring(patternStart, searchEnd);
-  const closingIdx = lineSlice.lastIndexOf(delimiter);
+
+  const condIdx = findTrailingConditional(lineSlice, delimiter);
+  const closeSearchSlice = condIdx === -1 ? lineSlice : lineSlice.substring(0, condIdx);
+  const closingIdx = closeSearchSlice.lastIndexOf(delimiter);
 
   let pattern: string;
   let consumeUntil: number;
+  let pendingConditional: string | undefined;
 
   if (closingIdx > 0) {
     pattern = lineSlice.substring(0, closingIdx);
     consumeUntil = patternStart + closingIdx + 1; // past closing delimiter
+    // Capture any :if/:unless directive trailing the closing delimiter.
+    const trailing = lineSlice.substring(closingIdx + 1);
+    const trimmed = trailing.trim();
+    if (trimmed.startsWith(':if') || trimmed.startsWith(':unless')) {
+      pendingConditional = trimmed;
+      consumeUntil = searchEnd; // consume the whole line; conditional is reparsed from the string
+    }
   } else {
     // No closing delimiter found - use everything to end of line
     pattern = lineSlice.trim();
@@ -158,9 +174,30 @@ export function parsePatternConstraint(
   }
 
   if (pattern) {
-    return { kind: 'pattern', pattern };
+    return { constraint: { kind: 'pattern', pattern }, ...(pendingConditional ? { pendingConditional } : {}) };
   }
-  return null;
+  return { constraint: null, ...(pendingConditional ? { pendingConditional } : {}) };
+}
+
+/**
+ * Locate a trailing `:if`/`:unless` directive on a pattern line, returning the
+ * offset of the leading `:` or -1 if absent. Used to keep the closing-delimiter
+ * search from mistaking a directive colon for part of the pattern.
+ */
+function findTrailingConditional(lineSlice: string, delimiter: string): number {
+  // The directive can only appear after a closing delimiter; scan for ":if"/":unless"
+  // that is preceded somewhere by the delimiter.
+  for (const kw of [':if', ':unless']) {
+    let idx = lineSlice.indexOf(kw);
+    while (idx !== -1) {
+      const before = lineSlice.substring(0, idx);
+      if (before.includes(delimiter)) {
+        return idx;
+      }
+      idx = lineSlice.indexOf(kw, idx + 1);
+    }
+  }
+  return -1;
 }
 
 /**
@@ -187,6 +224,11 @@ export function parseBoundsConstraint(reader: SchemaTokenReader): BoundsParseRes
           constraint: parseBoundsFromString(content),
           pendingConditional: afterParen,
         };
+      }
+      // A typed default may trail the bounds (e.g. "(1..5) ##3").
+      const trailing = afterParen.trim();
+      if (trailing) {
+        return { constraint: parseBoundsFromString(content), pendingDefault: trailing };
       }
       return { constraint: parseBoundsFromString(content) };
     }
@@ -248,6 +290,26 @@ export function parseBoundsConstraint(reader: SchemaTokenReader): BoundsParseRes
 }
 
 /**
+ * Temporal bound literals: date, time, and timestamp (ISO 8601 forms).
+ */
+const TEMPORAL_BOUND = /^\d{4}-\d{2}-\d{2}([T ][0-9:.+\-Zz]+)?$|^\d{2}:\d{2}(:\d{2})?$/;
+
+/**
+ * Parse a single bound value, preserving temporal literals as strings and
+ * numeric literals as numbers. Returns undefined for empty/invalid input.
+ */
+function parseBoundValue(raw: string): number | string | undefined {
+  const s = raw.trim();
+  if (!s) return undefined;
+  if (TEMPORAL_BOUND.test(s)) {
+    return s; // temporal literal, compared chronologically downstream
+  }
+  const num = parseFloat(s);
+  if (!isNaN(num)) return num;
+  return s; // fall back to string (e.g. partial date)
+}
+
+/**
  * Parse bounds from a string like "3..10", "3..", "..10", or "3"
  */
 export function parseBoundsFromString(content: string): SchemaConstraint | null {
@@ -260,20 +322,16 @@ export function parseBoundsFromString(content: string): SchemaConstraint | null 
     const minStr = parts[0]?.trim();
     const maxStr = parts[1]?.trim();
     if (minStr) {
-      min = parseFloat(minStr);
-      if (isNaN(min)) min = minStr; // date string
+      min = parseBoundValue(minStr);
     }
     if (maxStr) {
-      max = parseFloat(maxStr);
-      if (isNaN(max)) max = maxStr; // date string
+      max = parseBoundValue(maxStr);
     }
   } else {
     // Exact value like (3) means min = max
-    const val = parseFloat(trimmed);
-    if (!isNaN(val)) {
-      min = val;
-      max = val;
-    }
+    const val = parseBoundValue(trimmed);
+    min = val;
+    max = val;
   }
 
   if (min !== undefined || max !== undefined) {
@@ -301,22 +359,61 @@ export function parseBoundsFromString(content: string): SchemaConstraint | null 
  * @param field - Field accumulator to add conditionals to
  * @param pendingConditionalString - Optional string from bounds parsing containing :if
  */
+/**
+ * Parse a complete `:if/:unless field op value` directive from a string.
+ * Returns undefined when the string lacks a comparison value (the caller then
+ * recovers the value from the token stream).
+ */
+function parseConditionalFromString(s: string): SchemaConditional | undefined {
+  const m = s.trim().match(
+    /^:(if|unless)\s+([\w.]+)\s*(!=|>=|<=|>|<|=)\s*(.+?)\s*$/
+  );
+  if (!m) return undefined;
+
+  const isUnless = m[1] === 'unless';
+  const condField = m[2]!;
+  const op = m[3] as ConditionalOperator;
+  const rawValue = m[4]!.trim();
+
+  let value: string | number | boolean;
+  if (rawValue === 'true' || rawValue === 'false') {
+    value = rawValue === 'true';
+  } else if (/^-?\d+(\.\d+)?$/.test(rawValue)) {
+    value = parseFloat(rawValue);
+  } else {
+    value = rawValue.replace(/^["']|["']$/g, '');
+  }
+
+  const cond: SchemaConditional = { field: condField, operator: op, value };
+  if (isUnless) cond.unless = true;
+  return cond;
+}
+
 export function parseConditionals(
   reader: SchemaTokenReader,
   field: FieldAccumulator,
   pendingConditionalString?: string
 ): void {
-  // First, check if we have pending conditional from bounds parsing
+  // First, check if we have pending conditional from bounds/pattern parsing
   if (pendingConditionalString) {
-    const ifMatch = pendingConditionalString.match(/:if\s+(\w+)\s*/);
-    if (ifMatch) {
-      const condField = ifMatch[1] || '';
+    // If the directive carries a full `field op value`, parse it from the string.
+    const full = parseConditionalFromString(pendingConditionalString);
+    if (full) {
+      field.conditionals.push(full);
+    } else {
+      const ifMatch = pendingConditionalString.match(/:(if|unless)\s+([\w.]+)\s*/);
+      if (ifMatch) {
+        const isUnless = ifMatch[1] === 'unless';
+        const condField = ifMatch[2] || '';
 
-      reader.skipWhitespace();
-      const { operator, value } = parseConditionalOperatorAndValue(reader);
+        reader.skipWhitespace();
+        const { operator, value } = parseConditionalOperatorAndValue(reader);
 
-      if (condField && operator) {
-        field.conditionals.push({ field: condField, operator, value });
+        if (condField && operator) {
+          const cond: SchemaConditional = { field: condField, operator, value };
+          if (isUnless) cond.unless = true;
+          field.conditionals.push(cond);
+        }
       }
     }
   }

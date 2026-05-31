@@ -391,6 +391,12 @@ export function validateInvariant(
 ): void {
   const expr = constraint.expression.trim();
 
+  // Spec: any null operand makes the expression evaluate to false.
+  if (hasNullOperand(ctx, path, expr)) {
+    addError(ctx, path, 'V008', `Invariant violation: ${expr}`, `${expr} to be true`, 'null operand');
+    return;
+  }
+
   // Try arithmetic equality: field = expr1 op expr2 (e.g., "total = subtotal + tax")
   const arithmeticMatch = expr.match(/^(\w+)\s*=\s*(\w+)\s*([+\-*/])\s*(\w+)$/);
   if (arithmeticMatch) {
@@ -455,6 +461,36 @@ export function validateInvariant(
       }
     }
   }
+}
+
+/**
+ * Reserved words in invariant expressions that are not field operands.
+ */
+const INVARIANT_KEYWORDS = new Set(['true', 'false']);
+
+/**
+ * Determine whether any field operand referenced by the expression is present
+ * in the document with a null value. Absent fields are not treated as null
+ * operands (their absence is handled by field-level required validation).
+ */
+function hasNullOperand(
+  ctx: CardinalityValidationContext,
+  path: string,
+  expr: string
+): boolean {
+  // Operands are identifiers (optionally dotted); skip numeric literals.
+  const tokens = expr.match(/[A-Za-z_][A-Za-z0-9_.]*/g);
+  if (!tokens) return false;
+
+  for (const token of tokens) {
+    if (INVARIANT_KEYWORDS.has(token)) continue;
+    const fullPath = path ? `${path}.${token}` : token;
+    const value = ctx.doc.get(fullPath);
+    if (value !== undefined && value.type === 'null') {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

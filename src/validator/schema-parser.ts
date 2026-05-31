@@ -594,6 +594,14 @@ class SchemaParser {
       return;
     }
 
+    // Percent: #%
+    if (token.type === TokenType.PREFIX_PERCENT) {
+      this.advance();
+      field.type = { kind: 'percent' };
+      this.checkForUnion(field);
+      return;
+    }
+
     // Currency: #$
     if (token.type === TokenType.PREFIX_CURRENCY) {
       this.advance();
@@ -673,31 +681,23 @@ class SchemaParser {
       return;
     }
 
-    // Temporal types
+    // Temporal types (a glued :directive suffix may be attached, e.g. timestamp:immutable)
     if (token.type === TokenType.IDENTIFIER) {
       const val = this.getTokenVal(token);
+      const colonIdx = val.indexOf(':');
+      const base = colonIdx === -1 ? val : val.substring(0, colonIdx);
+      const suffix = colonIdx === -1 ? '' : val.substring(colonIdx);
 
-      if (val === 'date') {
+      const temporalKind =
+        base === 'date' ? 'date' :
+        base === 'timestamp' ? 'timestamp' :
+        base === 'time' ? 'time' :
+        base === 'duration' ? 'duration' : undefined;
+
+      if (temporalKind) {
         this.advance();
-        field.type = { kind: 'date' };
-        this.checkForUnion(field);
-        return;
-      }
-      if (val === 'timestamp') {
-        this.advance();
-        field.type = { kind: 'timestamp' };
-        this.checkForUnion(field);
-        return;
-      }
-      if (val === 'time') {
-        this.advance();
-        field.type = { kind: 'time' };
-        this.checkForUnion(field);
-        return;
-      }
-      if (val === 'duration') {
-        this.advance();
-        field.type = { kind: 'duration' };
+        field.type = { kind: temporalKind };
+        this.applyGluedDirectives(field, suffix);
         this.checkForUnion(field);
         return;
       }
@@ -716,6 +716,21 @@ class SchemaParser {
     // Default: string type (no prefix)
     field.type = { kind: 'string' };
     this.checkForUnion(field);
+  }
+
+  /**
+   * Apply directives glued onto a type token suffix (e.g. ":immutable", ":computed").
+   * Recognized directives toggle field flags; unknown suffixes are ignored.
+   */
+  private applyGluedDirectives(field: SchemaField, suffix: string): void {
+    if (!suffix) return;
+    for (const part of suffix.split(':')) {
+      if (part === 'immutable') {
+        field.immutable = true;
+      } else if (part === 'computed') {
+        field.computed = true;
+      }
+    }
   }
 
   /**
@@ -772,6 +787,36 @@ class SchemaParser {
           return;
         }
 
+        // Check for percent (#%)
+        if (nextToken.type === TokenType.PREFIX_PERCENT) {
+          this.advance();
+          unionTypes.push({ kind: 'percent' });
+          field.type = { kind: 'union', types: unionTypes };
+          this.checkForUnion(field);
+          return;
+        }
+
+        // Check for currency (#$)
+        if (nextToken.type === TokenType.PREFIX_CURRENCY) {
+          this.advance();
+          unionTypes.push({ kind: 'currency', places: 2 });
+          field.type = { kind: 'union', types: unionTypes };
+          this.checkForUnion(field);
+          return;
+        }
+
+        // Check for named type (date, timestamp, time, duration)
+        if (nextToken.type === TokenType.IDENTIFIER) {
+          const named = this.namedTypeFromString(this.getTokenVal(nextToken));
+          if (named) {
+            this.advance();
+            unionTypes.push(named);
+            field.type = { kind: 'union', types: unionTypes };
+            this.checkForUnion(field);
+            return;
+          }
+        }
+
         // Check for quoted string ("" means string type in union)
         if (nextToken.type === TokenType.STRING_QUOTED) {
           this.advance();
@@ -826,6 +871,28 @@ class SchemaParser {
           continue;
         }
 
+        // Check for percent (#%) - must check before number (#)
+        if (rest.startsWith('#%')) {
+          unionTypes.push({ kind: 'percent' });
+          rest = rest.substring(2);
+          if (rest.startsWith('|')) {
+            rest = rest.substring(1);
+            expectMoreTypes = rest.length === 0;
+          }
+          continue;
+        }
+
+        // Check for currency (#$) - must check before number (#)
+        if (rest.startsWith('#$')) {
+          unionTypes.push({ kind: 'currency', places: 2 });
+          rest = rest.substring(2);
+          if (rest.startsWith('|')) {
+            rest = rest.substring(1);
+            expectMoreTypes = rest.length === 0;
+          }
+          continue;
+        }
+
         // Check for number (#)
         if (rest.startsWith('#')) {
           unionTypes.push({ kind: 'number' });
@@ -846,6 +913,21 @@ class SchemaParser {
             expectMoreTypes = rest.length === 0;
           }
           continue;
+        }
+
+        // Check for named type word (date, timestamp, time, duration)
+        const namedMatch = rest.match(/^(timestamp|duration|date|time)/);
+        if (namedMatch) {
+          const named = this.namedTypeFromString(namedMatch[1]!);
+          if (named) {
+            unionTypes.push(named);
+            rest = rest.substring(namedMatch[1]!.length);
+            if (rest.startsWith('|')) {
+              rest = rest.substring(1);
+              expectMoreTypes = rest.length === 0;
+            }
+            continue;
+          }
         }
 
         // Unknown character - stop parsing
@@ -885,10 +967,41 @@ class SchemaParser {
           if (field.type.kind === 'union') {
             field.type.types.push({ kind: 'number' });
           }
+        } else if (nextToken.type === TokenType.PREFIX_PERCENT) {
+          this.advance();
+          if (field.type.kind === 'union') {
+            field.type.types.push({ kind: 'percent' });
+          }
+        } else if (nextToken.type === TokenType.PREFIX_CURRENCY) {
+          this.advance();
+          if (field.type.kind === 'union') {
+            field.type.types.push({ kind: 'currency', places: 2 });
+          }
+        } else if (nextToken.type === TokenType.IDENTIFIER) {
+          const named = this.namedTypeFromString(this.getTokenVal(nextToken));
+          if (named) {
+            this.advance();
+            if (field.type.kind === 'union') {
+              field.type.types.push(named);
+            }
+          }
         }
       }
 
       this.checkForUnion(field); // Check for more union members in next token
+    }
+  }
+
+  /**
+   * Map a bare type-name word to its temporal SchemaFieldType, if recognized.
+   */
+  private namedTypeFromString(word: string): SchemaFieldType | undefined {
+    switch (word) {
+      case 'date': return { kind: 'date' };
+      case 'timestamp': return { kind: 'timestamp' };
+      case 'time': return { kind: 'time' };
+      case 'duration': return { kind: 'duration' };
+      default: return undefined;
     }
   }
 
@@ -925,6 +1038,16 @@ class SchemaParser {
    * Parse default value.
    */
   private parseDefaultValue(field: SchemaField): void {
+    // A default captured from a compound bounds token (e.g. "(1..5) ##3").
+    const pending = (field as FieldAccumulator).pendingDefault;
+    if (pending) {
+      delete (field as FieldAccumulator).pendingDefault;
+      const parsed = this.parseDefaultFromString(field, pending);
+      if (parsed) {
+        field.defaultValue = parsed;
+      }
+    }
+
     this.skipWhitespace();
 
     const token = this.peek();
@@ -945,6 +1068,7 @@ class SchemaParser {
       tokenType === TokenType.PREFIX_NUMBER ||
       tokenType === TokenType.PREFIX_INTEGER ||
       tokenType === TokenType.PREFIX_CURRENCY ||
+      tokenType === TokenType.PREFIX_PERCENT ||
       tokenType === TokenType.PREFIX_BOOLEAN ||
       tokenType === TokenType.STRING_QUOTED ||
       tokenType === TokenType.IDENTIFIER ||
@@ -952,7 +1076,7 @@ class SchemaParser {
       tokenType === TokenType.BOOLEAN ||
       tokenType === TokenType.DATE
     ) {
-      const defaultVal = this.parseDefaultValueToken();
+      const defaultVal = this.parseDefaultValueToken(field);
       if (defaultVal) {
         field.defaultValue = defaultVal;
       }
@@ -960,10 +1084,71 @@ class SchemaParser {
   }
 
   /**
+   * Build a numeric default value tagged to match the field's declared type.
+   */
+  private numericDefaultForField(field: SchemaField, raw: string): OdinValue {
+    const kind = field.type.kind;
+    if (kind === 'integer') {
+      return { type: 'integer', value: parseInt(raw, 10) };
+    }
+    if (kind === 'currency') {
+      const places = field.type.kind === 'currency' ? field.type.places : 2;
+      return { type: 'currency', value: parseFloat(raw), decimalPlaces: places };
+    }
+    if (kind === 'percent') {
+      return { type: 'percent', value: parseFloat(raw) };
+    }
+    // number, decimal, or untyped numeric default
+    return { type: 'number', value: parseFloat(raw) };
+  }
+
+  /**
+   * Parse a default value from a raw string fragment (e.g. "##3", "#$5.00", "?true").
+   */
+  private parseDefaultFromString(field: SchemaField, raw: string): OdinValue | undefined {
+    const s = raw.trim();
+    if (!s) return undefined;
+
+    if (s.startsWith('##')) {
+      return { type: 'integer', value: parseInt(s.substring(2), 10) };
+    }
+    if (s.startsWith('#$')) {
+      const places = field.type.kind === 'currency' ? field.type.places : 2;
+      return { type: 'currency', value: parseFloat(s.substring(2)), decimalPlaces: places };
+    }
+    if (s.startsWith('#%')) {
+      return { type: 'percent', value: parseFloat(s.substring(2)) };
+    }
+    if (s.startsWith('#')) {
+      return { type: 'number', value: parseFloat(s.substring(1)) };
+    }
+    if (s.startsWith('?')) {
+      return { type: 'boolean', value: s.substring(1) === 'true' };
+    }
+    if (s === 'true' || s === 'false') {
+      return { type: 'boolean', value: s === 'true' };
+    }
+    const num = parseFloat(s);
+    if (!isNaN(num) && /^-?\d/.test(s)) {
+      return this.numericDefaultForField(field, s);
+    }
+    const unquoted = s.replace(/^["']|["']$/g, '');
+    return { type: 'string', value: unquoted };
+  }
+
+  /**
    * Parse default value token.
    */
-  private parseDefaultValueToken(): OdinValue | undefined {
+  private parseDefaultValueToken(field: SchemaField): OdinValue | undefined {
     const token = this.peek();
+
+    // Bare numeric token (the type prefix was already consumed as the field type,
+    // e.g. `##3` -> integer type + bare NUMBER "3").
+    if (token.type === TokenType.NUMBER) {
+      const raw = this.getTokenVal(token);
+      this.advance();
+      return this.numericDefaultForField(field, raw);
+    }
 
     if (token.type === TokenType.PREFIX_INTEGER) {
       this.advance();
@@ -989,6 +1174,15 @@ class SchemaParser {
         const val = parseFloat(this.getTokenVal(this.peek()));
         this.advance();
         return { type: 'currency', value: val, decimalPlaces: 2 };
+      }
+    }
+
+    if (token.type === TokenType.PREFIX_PERCENT) {
+      this.advance();
+      if (this.peek().type === TokenType.NUMBER) {
+        const val = parseFloat(this.getTokenVal(this.peek()));
+        this.advance();
+        return { type: 'percent', value: val };
       }
     }
 

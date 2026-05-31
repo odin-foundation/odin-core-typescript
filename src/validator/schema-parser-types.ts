@@ -127,6 +127,8 @@ export interface FieldAccumulator {
   constraints: SchemaConstraint[];
   conditionals: SchemaConditional[];
   defaultValue?: SchemaField['defaultValue'];
+  /** Default value text that trailed a compound bounds token (e.g. "##3" in "(1..5) ##3"). */
+  pendingDefault?: string;
 }
 
 /**
