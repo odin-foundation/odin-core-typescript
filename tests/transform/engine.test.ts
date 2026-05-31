@@ -569,8 +569,8 @@ describe('Transform Engine', () => {
 
         const result = executeTransform(transform, { code: 'AB' });
 
-        // Field at pos 0-5 with value "AB" padded to 5 chars with custom pad char '*'
-        expect(result.formatted).toBe('AB***');
+        // Field at pos 0-5 padded to 5 chars; record then padded to lineWidth 15 with '*'
+        expect(result.formatted).toBe('AB*************');
       });
     });
   });

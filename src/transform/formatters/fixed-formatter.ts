@@ -21,6 +21,7 @@ export function formatFixedWidth(
   const { transform, onWarning } = options;
 
   // Fixed-width formatting processes segments with position/length modifiers
+  const hasLineWidth = transform.target.lineWidth !== undefined;
   const lineWidth = transform.target.lineWidth ?? 80;
   const defaultPadChar = transform.target.padChar ?? ' ';
   const lineEnding = transform.target.lineEnding ?? '\n';
@@ -41,6 +42,7 @@ export function formatFixedWidth(
           segment.mappings,
           item as Record<string, TransformValue>,
           lineWidth,
+          hasLineWidth,
           defaultPadChar,
           truncate,
           onWarning
@@ -57,6 +59,7 @@ export function formatFixedWidth(
         segment.mappings,
         data,
         lineWidth,
+        hasLineWidth,
         defaultPadChar,
         truncate,
         onWarning
@@ -75,6 +78,7 @@ function formatFixedWidthLine(
   mappings: FieldMapping[],
   data: Record<string, TransformValue>,
   lineWidth: number,
+  hasLineWidth: boolean,
   defaultPadChar: string,
   truncate: boolean,
   onWarning: (warning: import('../../types/transform.js').TransformWarning) => void
@@ -141,6 +145,15 @@ function formatFixedWidthLine(
     }
 
     line = line.slice(0, pos) + value + line.slice(pos + len);
+  }
+
+  // Pad the record to the configured fixed line width.
+  if (hasLineWidth) {
+    if (line.length < lineWidth) {
+      line += defaultPadChar.repeat(lineWidth - line.length);
+    } else if (line.length > lineWidth && truncate) {
+      line = line.slice(0, lineWidth);
+    }
   }
 
   return line;

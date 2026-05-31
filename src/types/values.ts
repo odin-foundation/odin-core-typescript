@@ -45,6 +45,9 @@ export interface OdinModifiers {
 
   /** XML namespace prefix for the element (:ns modifier). */
   readonly ns?: string;
+
+  /** Wrap the XML element text in a CDATA section (:cdata modifier). */
+  readonly cdata?: boolean;
 }
 
 /**

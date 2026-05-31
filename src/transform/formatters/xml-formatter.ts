@@ -165,6 +165,17 @@ function hasAttrModifier(value: OdinValue | undefined): boolean {
 }
 
 /**
+ * Render element text content, wrapping in a CDATA section when :cdata is set.
+ */
+function renderXmlText(value: OdinValue | undefined, valueStr: string): string {
+  if (value?.modifiers?.cdata === true) {
+    // Split any embedded CDATA terminator so the section stays well-formed.
+    return `<![CDATA[${valueStr.replace(/]]>/g, ']]]]><![CDATA[>')}]]>`;
+  }
+  return escapeXml(valueStr);
+}
+
+/**
  * Collect children marked with :attr modifier as XML attributes.
  * Returns the attribute string and a set of keys that should be skipped.
  */
@@ -270,7 +281,7 @@ function renderXmlTree(
 
           if (arrayItem.value) {
             const valueStr = odinValueToXmlString(arrayItem.value);
-            parts.push(`${pad}<${itemTag}${itemAttrs}>${escapeXml(valueStr)}</${itemTag}>\n`);
+            parts.push(`${pad}<${itemTag}${itemAttrs}>${renderXmlText(arrayItem.value, valueStr)}</${itemTag}>\n`);
           } else {
             parts.push(`${pad}<${itemTag}${itemAttrs}>\n`);
             parts.push(
@@ -308,13 +319,13 @@ function renderXmlTree(
       if (child.children.size > 0) {
         // Has both value and children (complex type) - rare case
         parts.push(`${pad}<${tag}${attrs}>\n`);
-        parts.push(`${pad}${' '.repeat(indent)}${escapeXml(valueStr)}\n`);
+        parts.push(`${pad}${' '.repeat(indent)}${renderXmlText(child.value, valueStr)}\n`);
         parts.push(
           renderXmlTree(child, doc, depth + 1, indent, false, false, emitTypeHints, namespaces)
         );
         parts.push(`${pad}</${tag}>\n`);
       } else {
-        parts.push(`${pad}<${tag}${attrs}>${escapeXml(valueStr)}</${tag}>\n`);
+        parts.push(`${pad}<${tag}${attrs}>${renderXmlText(child.value, valueStr)}</${tag}>\n`);
       }
     }
   }
@@ -374,7 +385,7 @@ function renderXmlTreeFiltered(
 
           if (arrayItem.value) {
             const valueStr = odinValueToXmlString(arrayItem.value);
-            parts.push(`${pad}<${itemTag}${itemAttrs}>${escapeXml(valueStr)}</${itemTag}>\n`);
+            parts.push(`${pad}<${itemTag}${itemAttrs}>${renderXmlText(arrayItem.value, valueStr)}</${itemTag}>\n`);
           } else {
             parts.push(`${pad}<${itemTag}${itemAttrs}>\n`);
             parts.push(
@@ -418,13 +429,13 @@ function renderXmlTreeFiltered(
 
       if (child.children.size > 0) {
         parts.push(`${pad}<${tag}${attrs}>\n`);
-        parts.push(`${pad}${' '.repeat(indent)}${escapeXml(valueStr)}\n`);
+        parts.push(`${pad}${' '.repeat(indent)}${renderXmlText(child.value, valueStr)}\n`);
         parts.push(
           renderXmlTreeFiltered(child, doc, depth + 1, indent, false, false, new Set(), emitTypeHints, namespaces)
         );
         parts.push(`${pad}</${tag}>\n`);
       } else {
-        parts.push(`${pad}<${tag}${attrs}>${escapeXml(valueStr)}</${tag}>\n`);
+        parts.push(`${pad}<${tag}${attrs}>${renderXmlText(child.value, valueStr)}</${tag}>\n`);
       }
     }
   }

@@ -791,11 +791,22 @@ class TransformParser {
 
   private parseModifiersFromString(raw: string): Modifier[] {
     const modifiers: Modifier[] = [];
+    // Modifiers whose operand may contain spaces/operators run to the next modifier boundary.
+    const greedyModifiers = new Set(['if', 'unless', 'object']);
     const modMatch = raw.matchAll(/:(\w+)(?:\s+([^\s:]+))?/g);
 
     for (const match of modMatch) {
       const name = match[1]!;
-      const valueStr = match[2];
+      let valueStr = match[2];
+
+      if (greedyModifiers.has(name)) {
+        // Capture the full operand from after the name to the next ` :word` boundary.
+        const start = match.index! + match[0].indexOf(name) + name.length;
+        const rest = raw.slice(start);
+        const boundary = rest.search(/\s:[a-zA-Z]/);
+        const operand = (boundary === -1 ? rest : rest.slice(0, boundary)).trim();
+        valueStr = operand.length > 0 ? operand : undefined;
+      }
 
       let value: string | number | boolean | undefined;
       if (valueStr !== undefined) {

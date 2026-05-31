@@ -33,6 +33,8 @@ import {
   sourceMissingError,
   transformError,
   transformWarning,
+  validationError,
+  validationWarning,
   danglingBranchError,
   TypeValidationError,
   isModifierCompatible,
@@ -40,6 +42,7 @@ import {
 } from './errors.js';
 import { setNestedValue, getSegmentOutputPath } from './engine-paths.js';
 import { evaluateCondition } from './engine-conditions.js';
+import { parseValueExpression } from './parser-expressions.js';
 import { applyModifiers } from './engine-modifiers.js';
 import { interpolateString } from './engine-interpolation.js';
 import { SECURITY_LIMITS } from '../utils/security-limits.js';
@@ -50,7 +53,12 @@ import {
   parseRecord,
   mergeSegmentOutput,
 } from './engine-multirecord.js';
-import { jsToTransformValue, transformValueToJs, isTruthy } from './engine-value-utils.js';
+import {
+  jsToTransformValue,
+  transformValueToJs,
+  transformValueToString,
+  isTruthy,
+} from './engine-value-utils.js';
 import { applyDirectives } from './engine-directives.js';
 import { applyConfidentialEnforcement } from './engine-confidential.js';
 
@@ -429,6 +437,28 @@ class TransformEngine {
     );
   }
 
+  // Evaluate a field-level :if / :unless condition (truthy path or `path op value`).
+  // The left path resolves against the current loop item when present, else source.
+  private evaluateFieldCondition(condition: string, context: TransformContext): boolean {
+    return evaluateCondition(condition, context, (path, ctx) =>
+      this.resolveFieldConditionPath(path, ctx)
+    );
+  }
+
+  // Resolve a field-condition path against the current loop item, falling back to source.
+  private resolveFieldConditionPath(path: string, context: TransformContext): TransformValue {
+    if (path.startsWith('.')) {
+      return this.resolvePathValue(path, context);
+    }
+    if (context.current !== undefined) {
+      const current = resolvePath(path, context.current);
+      if (current !== undefined) {
+        return jsToTransformValue(current);
+      }
+    }
+    return this.resolvePathValue(path, context);
+  }
+
   // Process a list of segments, honoring if/elif/else conditional chains.
   // A chain is a run of consecutive segments: one `if`, then any `elif`, then
   // an optional `else`. Only the first branch whose condition holds is emitted.
@@ -472,6 +502,16 @@ class TransformEngine {
     }
   }
 
+  // A segment whose name begins with `_` is a computation-only sink.
+  private isSinkSegment(segmentPath: string): boolean {
+    if (segmentPath === '') return false;
+    const name = segmentPath.startsWith('segment.')
+      ? segmentPath.slice('segment.'.length)
+      : segmentPath;
+    const last = name.split('.').pop() ?? name;
+    return last.startsWith('_');
+  }
+
   private processSegment(
     segment: TransformSegment,
     context: TransformContext,
@@ -480,6 +520,10 @@ class TransformEngine {
     const loopDirective = segment.directives.find((d) => d.type === 'loop');
     // _from directive provides an alternative loop source path
     const fromDirective = segment.directives.find((d) => d.type === 'from');
+
+    // Computation-only sink: a `_`-prefixed section runs for side effects only
+    // (accumulators, verbs) and never appears in the output.
+    const isSink = this.isSinkSegment(segment.path);
 
     if (loopDirective && segment.isArray) {
       // Security: Check loop nesting depth to prevent stack overflow attacks
@@ -547,7 +591,9 @@ class TransformEngine {
           }
         }
 
-        setNestedValue(output, segment.path, results);
+        if (!isSink) {
+          setNestedValue(output, segment.path, results);
+        }
       }
     } else {
       // Process single segment
@@ -557,7 +603,9 @@ class TransformEngine {
         this.processMapping(mapping, context, segmentOutput, segment.path);
       }
 
-      if (segment.path === '') {
+      if (isSink) {
+        // Sink section: side effects only, nothing emitted.
+      } else if (segment.path === '') {
         // Root-level segment (from {} header): merge directly into output
         Object.assign(output, segmentOutput);
       } else if (segment.path.includes('.')) {
@@ -579,35 +627,26 @@ class TransformEngine {
     try {
       const ifModifier = mapping.modifiers.find((m) => m.name === 'if');
       if (ifModifier) {
-        let conditionPath = String(ifModifier.value);
-        if (conditionPath.startsWith('@')) {
-          conditionPath = conditionPath.slice(1);
-        }
-        if (conditionPath.startsWith('.')) {
-          conditionPath = conditionPath.slice(1);
-        }
-        const conditionValue = resolvePath(conditionPath, context.current ?? context.source);
-        if (!conditionValue) return;
+        if (!this.evaluateFieldCondition(String(ifModifier.value), context)) return;
       }
 
       const unlessModifier = mapping.modifiers.find((m) => m.name === 'unless');
       if (unlessModifier) {
-        let conditionPath = String(unlessModifier.value);
-        if (conditionPath.startsWith('@')) {
-          conditionPath = conditionPath.slice(1);
-        }
-        if (conditionPath.startsWith('.')) {
-          conditionPath = conditionPath.slice(1);
-        }
-        const conditionValue = resolvePath(conditionPath, context.current ?? context.source);
-        if (conditionValue) return;
+        if (this.evaluateFieldCondition(String(unlessModifier.value), context)) return;
       }
 
-      let value = this.evaluateExpression(mapping.value, context);
+      const objectModifier = mapping.modifiers.find((m) => m.name === 'object');
+
+      let value = objectModifier
+        ? this.buildInlineObject(String(objectModifier.value), context)
+        : this.evaluateExpression(mapping.value, context);
 
       value = applyModifiers(value, mapping.modifiers, context, (path, ctx) =>
         this.resolvePathValue(path, ctx)
       );
+
+      // Validation modifiers: :validate, :enum, :range (honors onValidation policy)
+      if (!this.validateFieldValue(value, mapping)) return;
 
       // Check for format-incompatible modifiers and warn
       const targetFormat = this.transform.target.format;
@@ -641,9 +680,10 @@ class TransformEngine {
         const hasConfidential = mapping.confidential === true;
         const hasDeprecated = mapping.modifiers.some((m) => m.name === 'deprecated');
         const hasAttr = mapping.modifiers.some((m) => m.name === 'attr');
+        const hasCdata = mapping.modifiers.some((m) => m.name === 'cdata');
         const nsMod = mapping.modifiers.find((m) => m.name === 'ns');
 
-        if (hasRequired || hasConfidential || hasDeprecated || hasAttr || nsMod?.value) {
+        if (hasRequired || hasConfidential || hasDeprecated || hasAttr || hasCdata || nsMod?.value) {
           value = {
             ...value,
             modifiers: {
@@ -651,10 +691,21 @@ class TransformEngine {
               ...(hasConfidential ? { confidential: true } : {}),
               ...(hasDeprecated ? { deprecated: true } : {}),
               ...(hasAttr ? { attr: true } : {}),
+              ...(hasCdata ? { cdata: true } : {}),
               ...(nsMod?.value ? { ns: String(nsMod.value) } : {}),
             },
           } as TransformValue;
         }
+      }
+
+      // :raw emits inline JSON structurally instead of an escaped string.
+      if (mapping.modifiers.some((m) => m.name === 'raw')) {
+        value = this.parseRawJsonValue(value);
+      }
+
+      // :array wraps the value in a single-element array.
+      if (mapping.modifiers.some((m) => m.name === 'array')) {
+        value = { type: 'array', items: [value] };
       }
 
       if (mapping.target !== '_') {
@@ -673,6 +724,131 @@ class TransformEngine {
         this.warnings.push(transformWarning(message, mapping.target));
       }
       // skip: do nothing
+    }
+  }
+
+  // Validate a value against :validate / :enum / :range modifiers.
+  // Returns false when the field should be dropped (onValidation = skip).
+  private validateFieldValue(value: TransformValue, mapping: FieldMapping): boolean {
+    if (value.type === 'null') return true;
+
+    const policy = this.transform.target.onValidation ?? 'fail';
+    const failures: string[] = [];
+
+    const validateMod = mapping.modifiers.find((m) => m.name === 'validate');
+    if (validateMod && validateMod.value !== undefined) {
+      const pattern = String(validateMod.value);
+      const str = transformValueToString(value);
+      let matched = false;
+      try {
+        matched = new RegExp(pattern).test(str);
+      } catch {
+        failures.push(`invalid validation pattern '${pattern}'`);
+      }
+      if (!matched && failures.length === 0) {
+        failures.push(`value '${str}' does not match pattern '${pattern}'`);
+      }
+    }
+
+    const enumMod = mapping.modifiers.find((m) => m.name === 'enum');
+    if (enumMod && enumMod.value !== undefined) {
+      const allowed = String(enumMod.value)
+        .split(',')
+        .map((v) => v.trim().replace(/^["']|["']$/g, ''));
+      const str = transformValueToString(value);
+      if (!allowed.includes(str)) {
+        failures.push(`value '${str}' is not one of [${allowed.join(', ')}]`);
+      }
+    }
+
+    const rangeMod = mapping.modifiers.find((m) => m.name === 'range');
+    if (rangeMod && rangeMod.value !== undefined) {
+      const rangeStr = String(rangeMod.value);
+      const parts = rangeStr.split('..');
+      const min = parseFloat(parts[0] ?? '');
+      const max = parseFloat(parts[1] ?? '');
+      const num = this.numericOf(value);
+      if (num === null) {
+        failures.push(`value '${transformValueToString(value)}' is not numeric for range ${rangeStr}`);
+      } else if ((!isNaN(min) && num < min) || (!isNaN(max) && num > max)) {
+        failures.push(`value ${num} is outside range ${rangeStr}`);
+      }
+    }
+
+    if (failures.length === 0) return true;
+
+    const message = `Validation failed for '${mapping.target}': ${failures.join('; ')}`;
+    if (policy === 'warn') {
+      this.warnings.push(validationWarning(message, mapping.target));
+      return true;
+    }
+    if (policy === 'skip') {
+      return false;
+    }
+    this.errors.push(validationError(message, mapping.target));
+    return false;
+  }
+
+  private numericOf(value: TransformValue): number | null {
+    switch (value.type) {
+      case 'integer':
+      case 'number':
+      case 'currency':
+      case 'percent':
+        return value.value;
+      case 'string': {
+        const n = parseFloat(value.value);
+        return isNaN(n) ? null : n;
+      }
+      default:
+        return null;
+    }
+  }
+
+  // Build a structural object from an inline :object {key = @path, ...} spec.
+  private buildInlineObject(spec: string, context: TransformContext): TransformValue {
+    const trimmed = spec.trim().replace(/^\{/, '').replace(/\}$/, '');
+    const obj: Record<string, unknown> = {};
+    if (trimmed.trim() !== '') {
+      for (const pair of this.splitObjectPairs(trimmed)) {
+        const eq = pair.indexOf('=');
+        if (eq === -1) continue;
+        const key = pair.slice(0, eq).trim();
+        const rhs = pair.slice(eq + 1).trim();
+        if (!key) continue;
+        const expr = parseValueExpression(rhs);
+        obj[key] = this.evaluateExpression(expr, context);
+      }
+    }
+    return { type: 'object', value: obj };
+  }
+
+  // Split an inline object body on commas not nested inside braces.
+  private splitObjectPairs(body: string): string[] {
+    const pairs: string[] = [];
+    let depth = 0;
+    let current = '';
+    for (const ch of body) {
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      if (ch === ',' && depth === 0) {
+        pairs.push(current);
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    if (current.trim() !== '') pairs.push(current);
+    return pairs;
+  }
+
+  // Parse a string value as JSON for :raw, producing a structural TransformValue.
+  private parseRawJsonValue(value: TransformValue): TransformValue {
+    if (value.type !== 'string') return value;
+    try {
+      return jsToTransformValue(JSON.parse(value.value));
+    } catch {
+      return value;
     }
   }
 
@@ -759,7 +935,11 @@ class TransformEngine {
     // Handle special paths
     if (path.startsWith('$accumulator.')) {
       const name = path.slice('$accumulator.'.length);
-      return context.accumulators.get(name) ?? { type: 'null' };
+      const acc = context.accumulators.get(name);
+      if (acc !== undefined) return acc;
+      const counter = context.counters.get(name);
+      if (counter !== undefined) return { type: 'integer', value: counter };
+      return { type: 'null' };
     }
 
     if (path.startsWith('$const.')) {
@@ -770,6 +950,11 @@ class TransformEngine {
     if (path === '_index') {
       const index = context.counters.get('_index');
       return index !== undefined ? { type: 'integer', value: index } : { type: 'null' };
+    }
+
+    // Loop counters declared via :counter are readable by bare name.
+    if (context.counters.has(path)) {
+      return { type: 'integer', value: context.counters.get(path)! };
     }
 
     // Empty path resolves to current loop item

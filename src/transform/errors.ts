@@ -54,6 +54,9 @@ export const TransformErrorCodes = {
   /** Conditional branch (elif/else) with no preceding if */
   T012_DANGLING_BRANCH: 'T012',
 
+  /** Field value failed a :validate / :enum / :range constraint */
+  T013_VALIDATION_FAILED: 'T013',
+
   // Extended codes (implementation-specific)
 
   /** Configuration error - transform document is misconfigured */
@@ -442,6 +445,30 @@ export function transformError(message: string, field?: string): TransformError 
 export function transformWarning(message: string, field?: string): TransformWarning {
   const warning: TransformWarning = {
     code: TransformErrorCodes.TRANSFORM_ERROR,
+    message,
+  };
+  if (field !== undefined) warning.field = field;
+  return warning;
+}
+
+/**
+ * Create a validation failure error (T013).
+ */
+export function validationError(message: string, field?: string): TransformError {
+  const error: TransformError = {
+    code: TransformErrorCodes.T013_VALIDATION_FAILED,
+    message,
+  };
+  if (field !== undefined) error.field = field;
+  return error;
+}
+
+/**
+ * Create a validation failure warning (T013).
+ */
+export function validationWarning(message: string, field?: string): TransformWarning {
+  const warning: TransformWarning = {
+    code: TransformErrorCodes.T013_VALIDATION_FAILED,
     message,
   };
   if (field !== undefined) warning.field = field;
