@@ -13,6 +13,7 @@ import type {
   OdinForm,
   FormMetadata,
   PageDefaults,
+  PageMargins,
   ScreenSettings,
   OdincodeSettings,
   FormPage,
@@ -34,6 +35,9 @@ import type {
   MultiselectElement,
   DateElement,
   SignatureElement,
+  RegionElement,
+  RegionChild,
+  PageTemplate,
 } from './types.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,14 +52,19 @@ import type {
  * @throws {ParseError} If the text is not valid ODIN
  */
 export function parseForm(text: string): OdinForm {
-  const doc = Odin.parse(text);
+  // `{@tpl_*}` template headers are not valid core ODIN sections, so split them
+  // out before parsing and parse each template body separately.
+  const { body, templateBlocks } = splitTemplates(text);
+
+  const doc = Odin.parse(body);
 
   const metadata = extractMetadata(doc);
   const pageDefaults = extractPageDefaults(doc);
   const screen = extractScreen(doc);
   const odincode = extractOdincode(doc);
   const i18n = extractI18n(doc);
-  const pages = extractPages(doc);
+  const pages = extractPages(doc, i18n);
+  const templates = extractTemplates(templateBlocks, i18n);
 
   return {
     metadata,
@@ -64,7 +73,133 @@ export function parseForm(text: string): OdinForm {
     ...(odincode !== undefined && { odincode }),
     ...(i18n !== undefined && { i18n }),
     pages,
+    ...(templates !== undefined && { templates }),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page Template Extraction
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface TemplateBlock {
+  /** Full template name, e.g. `tpl_vehicles_continued`. */
+  name: string;
+  /** Lines of the template body (everything after the `{@tpl_*}` header). */
+  text: string;
+}
+
+/**
+ * Split a forms document into its core-parseable body and the raw text of each
+ * `{@tpl_*}` template block. A template block runs from its header line until
+ * the next top-level section (`{$...}`, `{page[...]}`, or another `{@tpl_*}`).
+ */
+function splitTemplates(text: string): { body: string; templateBlocks: TemplateBlock[] } {
+  const lines = text.split(/\r?\n/);
+  const bodyLines: string[] = [];
+  const templateBlocks: TemplateBlock[] = [];
+
+  const tplHeader = /^\s*\{\s*@(tpl_[A-Za-z0-9_]+)\s*\}\s*$/;
+  const topLevelHeader = /^\s*\{\s*(\$|page\[\d+\]|@tpl_)/;
+
+  let current: TemplateBlock | undefined;
+  for (const line of lines) {
+    const tplMatch = tplHeader.exec(line);
+    if (tplMatch) {
+      current = { name: tplMatch[1]!, text: '' };
+      templateBlocks.push(current);
+      continue;
+    }
+    if (current) {
+      // A new top-level (non-template) section ends the current template.
+      if (topLevelHeader.test(line) && !tplHeader.test(line)) {
+        current = undefined;
+        bodyLines.push(line);
+      } else {
+        current.text += line + '\n';
+      }
+      continue;
+    }
+    bodyLines.push(line);
+  }
+
+  return { body: reanchor(bodyLines.join('\n')), templateBlocks };
+}
+
+/**
+ * A relative tabular header (`{.x[] : ...}`) leaves the core parser's parent
+ * context pointing at the field, so any following relative header (`{.region…}`,
+ * `{.field…}`) nests under it. Re-emit the active top-level anchor (`{page[N]}`
+ * or the section root) after each such block so siblings resolve correctly.
+ */
+function reanchor(text: string, rootAnchor?: string): string {
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+
+  const anchorHeader = /^\s*\{\s*(page\[\d+\]|tpl\.[A-Za-z0-9_]+)\s*\}\s*$/;
+  const relativeHeader = /^\s*\{\s*\./;
+  const relativeTabular = /^\s*\{\s*\.[^}]*\[\]\s*:/;
+
+  let anchor = rootAnchor;
+  let needsReanchor = false;
+
+  for (const line of lines) {
+    const anchorMatch = anchorHeader.exec(line);
+    if (anchorMatch) {
+      anchor = `{${anchorMatch[1]}}`;
+      needsReanchor = false;
+      out.push(line);
+      continue;
+    }
+
+    if (relativeHeader.test(line)) {
+      if (needsReanchor && anchor) {
+        out.push(anchor);
+        needsReanchor = false;
+      }
+      if (relativeTabular.test(line)) {
+        needsReanchor = true;
+      }
+      out.push(line);
+      continue;
+    }
+
+    out.push(line);
+  }
+
+  return out.join('\n');
+}
+
+/**
+ * Parse each template block body into a PageTemplate. The body is reparented
+ * under a synthetic `{tpl.<name>}` section so it parses as ordinary ODIN.
+ */
+function extractTemplates(
+  blocks: TemplateBlock[],
+  i18n: Record<string, string> | undefined
+): Record<string, PageTemplate> | undefined {
+  if (blocks.length === 0) return undefined;
+
+  const templates: Record<string, PageTemplate> = {};
+  for (const block of blocks) {
+    const root = `tpl.${block.name}`;
+    const synthetic = reanchor(`{${root}}\n${block.text}`, `{${root}}`);
+    const doc = Odin.parse(synthetic);
+
+    const prefix = `${root}.`;
+    const pageTemplate = getBooleanValue(doc, `${prefix}page-template`) ?? true;
+    const continues = getStringValue(doc, `${prefix}continues`);
+    const formId = getStringValue(doc, `${prefix}form-id`);
+    const elements = extractElements(doc, prefix, i18n);
+
+    templates[block.name] = {
+      name: block.name,
+      pageTemplate,
+      ...(continues !== undefined && { continues }),
+      ...(formId !== undefined && { formId }),
+      elements,
+    };
+  }
+  return templates;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,7 +221,7 @@ function extractPageDefaults(doc: OdinDocument): PageDefaults | undefined {
   const width = getNumberValue(doc, '$.page.width');
   const height = getNumberValue(doc, '$.page.height');
   const unit = getStringValue(doc, '$.page.unit');
-  const margin = getNumberValue(doc, '$.page.margin');
+  const margin = extractMargins(doc);
 
   if (width === undefined && height === undefined && unit === undefined) {
     return undefined;
@@ -102,6 +237,23 @@ function extractPageDefaults(doc: OdinDocument): PageDefaults | undefined {
     height: height ?? 11,
     unit: resolvedUnit,
     ...(margin !== undefined && { margin }),
+  };
+}
+
+/** Read per-side margins from `$.page.margin.{top,right,bottom,left}`. */
+function extractMargins(doc: OdinDocument): PageMargins | undefined {
+  const top = getNumberValue(doc, '$.page.margin.top');
+  const right = getNumberValue(doc, '$.page.margin.right');
+  const bottom = getNumberValue(doc, '$.page.margin.bottom');
+  const left = getNumberValue(doc, '$.page.margin.left');
+  if (top === undefined && right === undefined && bottom === undefined && left === undefined) {
+    return undefined;
+  }
+  return {
+    ...(top !== undefined && { top }),
+    ...(right !== undefined && { right }),
+    ...(bottom !== undefined && { bottom }),
+    ...(left !== undefined && { left }),
   };
 }
 
@@ -150,7 +302,10 @@ function extractI18n(doc: OdinDocument): Record<string, string> | undefined {
  * Walk all paths to find distinct page indices, then for each page
  * collect elements in document order.
  */
-function extractPages(doc: OdinDocument): readonly FormPage[] {
+function extractPages(
+  doc: OdinDocument,
+  i18n: Record<string, string> | undefined
+): readonly FormPage[] {
   const allPaths = doc.paths();
 
   // Find all page indices referenced in paths like page[N].*
@@ -174,22 +329,24 @@ function extractPages(doc: OdinDocument): readonly FormPage[] {
   // Build pages in index order
   const pages: FormPage[] = [];
   for (const index of sortedIndices) {
-    pages.push(extractPage(doc, index));
+    pages.push({ elements: extractElements(doc, `page[${index}].`, i18n) });
   }
 
   return pages;
 }
 
 /**
- * Extract a single page by collecting all element keys from paths like
- * page[N].{elementType}.{elementName}.{property}
+ * Collect element keys under `prefix` in document order and build each element.
+ * An element key is `{elementType}.{elementName}` (e.g. `text.title`,
+ * `region.vehicles`). Region children are absorbed by their region.
  */
-function extractPage(doc: OdinDocument, pageIndex: number): FormPage {
-  const prefix = `page[${pageIndex}].`;
+function extractElements(
+  doc: OdinDocument,
+  prefix: string,
+  i18n: Record<string, string> | undefined
+): readonly FormElement[] {
   const allPaths = doc.paths().filter((p) => p.startsWith(prefix));
 
-  // Collect unique element keys in document order (preserve insertion order)
-  // An element key is "{elementType}.{elementName}" e.g. "text.title"
   const elementKeysSeen = new Set<string>();
   const elementKeysOrdered: string[] = [];
 
@@ -197,7 +354,7 @@ function extractPage(doc: OdinDocument, pageIndex: number): FormPage {
     const rest = path.slice(prefix.length); // e.g. "text.title.content"
     const parts = rest.split('.');
     if (parts.length >= 2) {
-      const elementKey = `${parts[0]}.${parts[1]}`; // "text.title"
+      const elementKey = `${parts[0]}.${parts[1]}`; // "text.title" / "region.vehicles"
       if (!elementKeysSeen.has(elementKey)) {
         elementKeysSeen.add(elementKey);
         elementKeysOrdered.push(elementKey);
@@ -205,19 +362,18 @@ function extractPage(doc: OdinDocument, pageIndex: number): FormPage {
     }
   }
 
-  // Build elements in order
   let idCounter = 0;
   const elements: FormElement[] = [];
   for (const elementKey of elementKeysOrdered) {
     const [elementType, elementName] = elementKey.split('.') as [string, string];
     const elementPrefix = `${prefix}${elementKey}.`;
-    const element = buildElement(doc, elementType, elementName, elementPrefix, idCounter++);
+    const element = buildElement(doc, elementType, elementName, elementPrefix, idCounter++, i18n);
     if (element !== undefined) {
       elements.push(element);
     }
   }
 
-  return { elements };
+  return elements;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -229,7 +385,8 @@ function buildElement(
   elementType: string,
   elementName: string,
   prefix: string,
-  idCounter: number
+  idCounter: number,
+  i18n: Record<string, string> | undefined
 ): FormElement | undefined {
   const id = `${elementType}_${elementName}_${idCounter}`;
 
@@ -249,13 +406,15 @@ function buildElement(
     case 'path':
       return buildPathElement(doc, elementName, id, prefix);
     case 'text':
-      return buildTextElement(doc, elementName, id, prefix);
+      return buildTextElement(doc, elementName, id, prefix, i18n);
     case 'img':
-      return buildImageElement(doc, elementName, id, prefix);
+      return buildImageElement(doc, elementName, id, prefix, i18n);
     case 'barcode':
-      return buildBarcodeElement(doc, elementName, id, prefix);
+      return buildBarcodeElement(doc, elementName, id, prefix, i18n);
     case 'field':
-      return buildFieldElement(doc, elementName, id, prefix);
+      return buildFieldElement(doc, elementName, id, prefix, i18n);
+    case 'region':
+      return buildRegionElement(doc, elementName, id, prefix, i18n);
     default:
       return undefined;
   }
@@ -396,13 +555,14 @@ function buildTextElement(
   doc: OdinDocument,
   name: string,
   id: string,
-  prefix: string
+  prefix: string,
+  i18n: Record<string, string> | undefined
 ): TextElement {
   return {
     type: 'text',
     name,
     id,
-    content: getStringValue(doc, `${prefix}content`) ?? '',
+    content: getLabelValue(doc, `${prefix}content`, i18n) ?? '',
     x: getNumberValue(doc, `${prefix}x`) ?? 0,
     y: getNumberValue(doc, `${prefix}y`) ?? 0,
     ...(getNumberValue(doc, `${prefix}rotate`) !== undefined && {
@@ -416,18 +576,21 @@ function buildImageElement(
   doc: OdinDocument,
   name: string,
   id: string,
-  prefix: string
+  prefix: string,
+  i18n: Record<string, string> | undefined
 ): ImageElement {
+  const background = getBooleanValue(doc, `${prefix}background`);
   return {
     type: 'img',
     name,
     id,
-    src: getStringValue(doc, `${prefix}src`) ?? '',
-    alt: getStringValue(doc, `${prefix}alt`) ?? '',
+    src: getBinaryLiteral(doc, `${prefix}src`) ?? '',
+    alt: getLabelValue(doc, `${prefix}alt`, i18n) ?? '',
     x: getNumberValue(doc, `${prefix}x`) ?? 0,
     y: getNumberValue(doc, `${prefix}y`) ?? 0,
     w: getNumberValue(doc, `${prefix}w`) ?? 0,
     h: getNumberValue(doc, `${prefix}h`) ?? 0,
+    ...(background !== undefined && { background }),
   };
 }
 
@@ -435,9 +598,11 @@ function buildBarcodeElement(
   doc: OdinDocument,
   name: string,
   id: string,
-  prefix: string
+  prefix: string,
+  i18n: Record<string, string> | undefined
 ): BarcodeElement {
-  const barcodeType = getStringValue(doc, `${prefix}barcode-type`) ?? 'code128';
+  const barcodeType =
+    getStringValue(doc, `${prefix}type`) ?? getStringValue(doc, `${prefix}barcode-type`) ?? 'code128';
   const validTypes = ['code39', 'code128', 'qr', 'datamatrix', 'pdf417'] as const;
   const resolvedType = validTypes.includes(barcodeType as (typeof validTypes)[number])
     ? (barcodeType as BarcodeElement['barcodeType'])
@@ -448,8 +613,8 @@ function buildBarcodeElement(
     name,
     id,
     barcodeType: resolvedType,
-    content: getStringValue(doc, `${prefix}content`) ?? '',
-    alt: getStringValue(doc, `${prefix}alt`) ?? '',
+    content: getLabelValue(doc, `${prefix}content`, i18n) ?? '',
+    alt: getLabelValue(doc, `${prefix}alt`, i18n) ?? '',
     x: getNumberValue(doc, `${prefix}x`) ?? 0,
     y: getNumberValue(doc, `${prefix}y`) ?? 0,
     w: getNumberValue(doc, `${prefix}w`) ?? 0,
@@ -465,16 +630,17 @@ function buildFieldElement(
   doc: OdinDocument,
   name: string,
   id: string,
-  prefix: string
+  prefix: string,
+  i18n: Record<string, string> | undefined
 ): FormElement | undefined {
   const fieldType = getStringValue(doc, `${prefix}type`) ?? 'text';
-  const baseField = extractBaseField(doc, name, id, prefix);
+  const baseField = extractBaseField(doc, name, id, prefix, i18n);
 
   switch (fieldType) {
     case 'text':
       return buildTextField(doc, prefix, baseField);
     case 'checkbox':
-      return buildCheckboxField(baseField);
+      return buildCheckboxField(doc, prefix, baseField);
     case 'radio':
       return buildRadioField(doc, prefix, baseField);
     case 'select':
@@ -482,7 +648,7 @@ function buildFieldElement(
     case 'multiselect':
       return buildMultiselectField(doc, prefix, baseField);
     case 'date':
-      return buildDateField(baseField);
+      return buildDateField(doc, prefix, baseField);
     case 'signature':
       return buildSignatureField(doc, prefix, baseField);
     default:
@@ -516,22 +682,23 @@ function extractBaseField(
   doc: OdinDocument,
   name: string,
   id: string,
-  prefix: string
+  prefix: string,
+  i18n: Record<string, string> | undefined
 ): BaseFieldProps {
   const required = getBooleanValue(doc, `${prefix}required`);
   const tabindex = getNumberValue(doc, `${prefix}tabindex`);
   const minLength = getNumberValue(doc, `${prefix}minLength`);
   const maxLength = getNumberValue(doc, `${prefix}maxLength`);
-  const min = getNumberValue(doc, `${prefix}min`) ?? getStringValue(doc, `${prefix}min`);
-  const max = getNumberValue(doc, `${prefix}max`) ?? getStringValue(doc, `${prefix}max`);
-  const ariaLabel = getStringValue(doc, `${prefix}aria-label`);
+  const min = getNumberValue(doc, `${prefix}min`) ?? getScalarString(doc, `${prefix}min`);
+  const max = getNumberValue(doc, `${prefix}max`) ?? getScalarString(doc, `${prefix}max`);
+  const ariaLabel = getLabelValue(doc, `${prefix}aria-label`, i18n);
   const readonlyVal = getBooleanValue(doc, `${prefix}readonly`);
   const bindRef = getReferenceValue(doc, `${prefix}bind`);
 
   return {
     name,
     id,
-    label: getStringValue(doc, `${prefix}label`) ?? '',
+    label: getLabelValue(doc, `${prefix}label`, i18n) ?? '',
     x: getNumberValue(doc, `${prefix}x`) ?? 0,
     y: getNumberValue(doc, `${prefix}y`) ?? 0,
     w: getNumberValue(doc, `${prefix}w`) ?? 0,
@@ -553,14 +720,25 @@ function buildTextField(
   prefix: string,
   base: BaseFieldProps
 ): TextFieldElement {
+  const value = getScalarString(doc, `${prefix}value`);
+  const inputType = getStringValue(doc, `${prefix}inputType`);
   const mask = getStringValue(doc, `${prefix}mask`);
   const placeholder = getStringValue(doc, `${prefix}placeholder`);
   const multiline = getBooleanValue(doc, `${prefix}multiline`);
   const maxLines = getNumberValue(doc, `${prefix}maxLines`);
 
+  const validInputTypes = ['text', 'email', 'tel', 'password', 'number', 'url'] as const;
+  const resolvedInputType = validInputTypes.includes(
+    inputType as (typeof validInputTypes)[number]
+  )
+    ? (inputType as TextFieldElement['inputType'])
+    : undefined;
+
   return {
     type: 'field.text',
     ...base,
+    ...(value !== undefined && { value }),
+    ...(resolvedInputType !== undefined && { inputType: resolvedInputType }),
     ...(mask !== undefined && { mask }),
     ...(placeholder !== undefined && { placeholder }),
     ...(multiline !== undefined && { multiline }),
@@ -568,8 +746,13 @@ function buildTextField(
   };
 }
 
-function buildCheckboxField(base: BaseFieldProps): CheckboxElement {
-  return { type: 'field.checkbox', ...base };
+function buildCheckboxField(
+  doc: OdinDocument,
+  prefix: string,
+  base: BaseFieldProps
+): CheckboxElement {
+  const checked = getBooleanValue(doc, `${prefix}checked`);
+  return { type: 'field.checkbox', ...base, ...(checked !== undefined && { checked }) };
 }
 
 function buildRadioField(
@@ -590,12 +773,14 @@ function buildSelectField(
   prefix: string,
   base: BaseFieldProps
 ): SelectElement {
+  const selected = getStringValue(doc, `${prefix}selected`);
   const placeholder = getStringValue(doc, `${prefix}placeholder`);
 
   return {
     type: 'field.select',
     ...base,
     options: extractOptions(doc, prefix),
+    ...(selected !== undefined && { selected }),
     ...(placeholder !== undefined && { placeholder }),
   };
 }
@@ -605,6 +790,7 @@ function buildMultiselectField(
   prefix: string,
   base: BaseFieldProps
 ): MultiselectElement {
+  const selected = extractFieldArray(doc, prefix, 'selected');
   const minSelect = getNumberValue(doc, `${prefix}minSelect`);
   const maxSelect = getNumberValue(doc, `${prefix}maxSelect`);
 
@@ -612,13 +798,19 @@ function buildMultiselectField(
     type: 'field.multiselect',
     ...base,
     options: extractOptions(doc, prefix),
+    ...(selected !== undefined && { selected }),
     ...(minSelect !== undefined && { minSelect }),
     ...(maxSelect !== undefined && { maxSelect }),
   };
 }
 
-function buildDateField(base: BaseFieldProps): DateElement {
-  return { type: 'field.date', ...base };
+function buildDateField(
+  doc: OdinDocument,
+  prefix: string,
+  base: BaseFieldProps
+): DateElement {
+  const value = getScalarString(doc, `${prefix}value`);
+  return { type: 'field.date', ...base, ...(value !== undefined && { value }) };
 }
 
 function buildSignatureField(
@@ -626,24 +818,150 @@ function buildSignatureField(
   prefix: string,
   base: BaseFieldProps
 ): SignatureElement {
+  const value = getBinaryLiteral(doc, `${prefix}value`);
   const dateField = getStringValue(doc, `${prefix}date_field`);
   return {
     type: 'field.signature',
     ...base,
+    ...(value !== undefined && { value }),
     ...(dateField !== undefined && { date_field: dateField }),
   };
 }
 
-/** Extract an `options` array from indexed paths like `prefix + options[0]`, `options[1]`... */
+/** Extract a field's `options` array. */
 function extractOptions(doc: OdinDocument, prefix: string): readonly string[] {
-  const options: string[] = [];
+  return extractFieldArray(doc, prefix, 'options') ?? [];
+}
+
+/**
+ * Extract a field's tabular string array (`options` / `selected`). Because a
+ * relative tabular header (`{.field.x.options[] : ~}`) resolves against the
+ * field's own path, the array lands at `<prefix><field>.<name>[n]` rather than
+ * `<prefix><name>[n]`. Search for it regardless of that extra segment.
+ */
+function extractFieldArray(
+  doc: OdinDocument,
+  prefix: string,
+  name: string
+): string[] | undefined {
+  // Direct location first.
+  const direct = collectIndexed(doc, `${prefix}${name}`);
+  if (direct.length > 0) return direct;
+
+  // Fall back: any `*.<name>[n]` directly under this field's prefix.
+  const re = new RegExp(`^${escapeRegExp(prefix)}(?:[^.]+\\.)*${escapeRegExp(name)}\\[(\\d+)\\]$`);
+  const indices: { idx: number; path: string }[] = [];
+  for (const p of doc.paths()) {
+    const m = re.exec(p);
+    if (m) indices.push({ idx: parseInt(m[1]!, 10), path: p });
+  }
+  if (indices.length === 0) return undefined;
+  indices.sort((a, b) => a.idx - b.idx);
+  const out: string[] = [];
+  for (const { path } of indices) {
+    const v = getStringValue(doc, path);
+    if (v !== undefined) out.push(v);
+  }
+  return out;
+}
+
+/** Collect a contiguous indexed string array at `base[0]`, `base[1]`, ... */
+function collectIndexed(doc: OdinDocument, base: string): string[] {
+  const out: string[] = [];
   let i = 0;
-  while (doc.has(`${prefix}options[${i}]`)) {
-    const val = getStringValue(doc, `${prefix}options[${i}]`);
-    if (val !== undefined) options.push(val);
+  while (doc.has(`${base}[${i}]`)) {
+    const v = getStringValue(doc, `${base}[${i}]`);
+    if (v !== undefined) out.push(v);
     i++;
   }
-  return options;
+  return out;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Region Element Builder
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildRegionElement(
+  doc: OdinDocument,
+  name: string,
+  id: string,
+  prefix: string,
+  i18n: Record<string, string> | undefined
+): RegionElement {
+  const bind = getReferenceValue(doc, `${prefix}bind`);
+  const max = getNumberValue(doc, `${prefix}max`);
+  const overflow =
+    getReferenceValue(doc, `${prefix}overflow`) ?? getStringValue(doc, `${prefix}overflow`);
+
+  const children = extractRegionChildren(doc, prefix, i18n);
+
+  return {
+    type: 'region',
+    name,
+    id,
+    x: getNumberValue(doc, `${prefix}x`) ?? 0,
+    y: getNumberValue(doc, `${prefix}y`) ?? 0,
+    w: getNumberValue(doc, `${prefix}w`) ?? 0,
+    h: getNumberValue(doc, `${prefix}h`) ?? 0,
+    ...(bind !== undefined && { bind: `@${bind}` }),
+    ...(max !== undefined && { max }),
+    ...(overflow !== undefined && {
+      overflow: getReferenceValue(doc, `${prefix}overflow`) !== undefined ? `@${overflow}` : overflow,
+    }),
+    children,
+  };
+}
+
+/**
+ * Collect a region's child elements. Children live under
+ * `<regionPrefix><childType>.<childName>.*` (e.g. `...region.vehicles.field.vin.x`).
+ * Region own-properties (x/y/w/h/bind/max/overflow) are skipped.
+ */
+function extractRegionChildren(
+  doc: OdinDocument,
+  prefix: string,
+  i18n: Record<string, string> | undefined
+): readonly RegionChild[] {
+  const ownProps = new Set(['x', 'y', 'w', 'h', 'bind', 'max', 'overflow']);
+  const childTypes = new Set(['text', 'field', 'img', 'barcode']);
+
+  const keysSeen = new Set<string>();
+  const keysOrdered: string[] = [];
+  for (const path of doc.paths()) {
+    if (!path.startsWith(prefix)) continue;
+    const rest = path.slice(prefix.length);
+    const parts = rest.split('.');
+    if (parts.length < 2) continue;
+    if (ownProps.has(parts[0]!)) continue;
+    if (!childTypes.has(parts[0]!)) continue;
+    const key = `${parts[0]}.${parts[1]}`;
+    if (!keysSeen.has(key)) {
+      keysSeen.add(key);
+      keysOrdered.push(key);
+    }
+  }
+
+  let idCounter = 0;
+  const children: RegionChild[] = [];
+  for (const key of keysOrdered) {
+    const [childType, childName] = key.split('.') as [string, string];
+    const childPrefix = `${prefix}${key}.`;
+    const built = buildElement(doc, childType, childName, childPrefix, idCounter++, i18n);
+    if (built === undefined) continue;
+    const yOffset = getNumberValue(doc, `${childPrefix}y-offset`);
+    const xOffset = getNumberValue(doc, `${childPrefix}x-offset`);
+    const child = {
+      ...built,
+      ...(yOffset !== undefined && { 'y-offset': yOffset }),
+      ...(xOffset !== undefined && { 'x-offset': xOffset }),
+    } as RegionChild;
+    children.push(child);
+  }
+  return children;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -740,6 +1058,59 @@ function extractFonted(
 function getStringValue(doc: OdinDocument, path: string): string | undefined {
   const val = doc.get(path);
   if (val === undefined) return undefined;
+  if (val.type === 'string') return val.value;
+  return undefined;
+}
+
+/**
+ * Resolve a string property that may instead be an `@$.i18n.*` reference.
+ * i18n keys are stored without the `$.i18n.` prefix.
+ */
+function getLabelValue(
+  doc: OdinDocument,
+  path: string,
+  i18n: Record<string, string> | undefined
+): string | undefined {
+  const val = doc.get(path);
+  if (val === undefined) return undefined;
+  if (val.type === 'string') return val.value;
+  if (val.type === 'reference') {
+    const ref = val.path;
+    if (ref.startsWith('$.i18n.')) {
+      const key = ref.slice('$.i18n.'.length);
+      return i18n?.[key] ?? ref;
+    }
+    return ref;
+  }
+  return undefined;
+}
+
+/**
+ * Read a scalar value as a string, preserving the raw source form for dates
+ * and timestamps (e.g. `1900-01-01`).
+ */
+function getScalarString(doc: OdinDocument, path: string): string | undefined {
+  const val = doc.get(path);
+  if (val === undefined) return undefined;
+  switch (val.type) {
+    case 'string':
+      return val.value;
+    case 'date':
+    case 'timestamp':
+      return (val as { raw?: string }).raw ?? String(val.value);
+    default:
+      return undefined;
+  }
+}
+
+/** Reconstruct an ODIN binary literal (`^algorithm:base64`) for a binary value. */
+function getBinaryLiteral(doc: OdinDocument, path: string): string | undefined {
+  const val = doc.get(path);
+  if (val === undefined) return undefined;
+  if (val.type === 'binary') {
+    const base64 = Buffer.from(val.data).toString('base64');
+    return val.algorithm ? `^${val.algorithm}:${base64}` : `^${base64}`;
+  }
   if (val.type === 'string') return val.value;
   return undefined;
 }

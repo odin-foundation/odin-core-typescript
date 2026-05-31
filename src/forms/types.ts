@@ -30,6 +30,8 @@ export interface OdinForm {
   readonly i18n?: Record<string, string>;
   /** Ordered list of form pages (`page[0]`, `page[1]`, ...). */
   readonly pages: readonly FormPage[];
+  /** Page templates (`{@tpl_*}`) keyed by template name. Optional. */
+  readonly templates?: Record<string, PageTemplate>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,8 +63,19 @@ export interface PageDefaults {
   readonly height: number;
   /** Measurement unit for all coordinates and dimensions on the page. */
   readonly unit: 'inch' | 'cm' | 'mm' | 'pt';
-  /** Page margin in the declared unit. Optional. */
-  readonly margin?: number;
+  /** Per-side page margins in the declared unit. Optional. */
+  readonly margin?: PageMargins;
+}
+
+/**
+ * Per-side page margins. Corresponds to `margin.top`, `margin.right`,
+ * `margin.bottom`, `margin.left` under `{$.page}`.
+ */
+export interface PageMargins {
+  readonly top?: number;
+  readonly right?: number;
+  readonly bottom?: number;
+  readonly left?: number;
 }
 
 /**
@@ -137,7 +150,9 @@ export type ElementType =
   | 'field.select'
   | 'field.multiselect'
   | 'field.date'
-  | 'field.signature';
+  | 'field.signature'
+  // Container
+  | 'region';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Base Element
@@ -390,6 +405,8 @@ export interface ImageElement extends BaseElement, Positioned, Sized {
   readonly src: string;
   /** Accessibility description for screen readers and Tagged PDF. Required. */
   readonly alt: string;
+  /** When true, renders behind all other elements at the lowest z-index. */
+  readonly background?: boolean;
 }
 
 /**
@@ -435,6 +452,13 @@ export interface BaseFieldElement extends BaseElement, Positioned, Sized, Valida
  */
 export interface TextFieldElement extends BaseFieldElement {
   readonly type: 'field.text';
+  /** Current inline text value. Optional. */
+  readonly value?: string;
+  /**
+   * Screen rendering hint controlling the HTML5 `<input type>` attribute.
+   * Print output is identical for all values.
+   */
+  readonly inputType?: 'text' | 'email' | 'tel' | 'password' | 'number' | 'url';
   /** Input mask pattern (e.g. `###-##-####`). Optional. */
   readonly mask?: string;
   /** Placeholder text shown when the field is empty. Optional. */
@@ -450,6 +474,8 @@ export interface TextFieldElement extends BaseFieldElement {
  */
 export interface CheckboxElement extends BaseFieldElement {
   readonly type: 'field.checkbox';
+  /** Whether the checkbox is checked. Optional inline value. */
+  readonly checked?: boolean;
 }
 
 /**
@@ -470,6 +496,8 @@ export interface SelectElement extends BaseFieldElement {
   readonly type: 'field.select';
   /** Ordered list of valid option values. Required. */
   readonly options: readonly string[];
+  /** Currently selected option value. Optional inline value. */
+  readonly selected?: string;
   /** Default label shown when no option is selected. Optional. */
   readonly placeholder?: string;
 }
@@ -481,6 +509,8 @@ export interface MultiselectElement extends BaseFieldElement {
   readonly type: 'field.multiselect';
   /** Ordered list of valid option values. Required. */
   readonly options: readonly string[];
+  /** Currently selected option values. Optional inline value. */
+  readonly selected?: readonly string[];
   /** Minimum number of selections required (integer ≥ 1). Optional. */
   readonly minSelect?: number;
   /** Maximum number of selections allowed. Optional. */
@@ -495,6 +525,8 @@ export interface MultiselectElement extends BaseFieldElement {
  */
 export interface DateElement extends BaseFieldElement {
   readonly type: 'field.date';
+  /** Current date value as an ISO 8601 date string. Optional inline value. */
+  readonly value?: string;
 }
 
 /**
@@ -502,11 +534,75 @@ export interface DateElement extends BaseFieldElement {
  */
 export interface SignatureElement extends BaseFieldElement {
   readonly type: 'field.signature';
+  /** Captured signature data as an ODIN binary literal. Optional inline value. */
+  readonly value?: string;
   /**
    * ODIN reference to an associated date field that records when the
    * signature was captured. Optional.
    */
   readonly date_field?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-item offset applied to repeated region children. (`y-offset`/`x-offset`)
+ */
+export interface RegionOffset {
+  /** Vertical spacing between repeated items. */
+  readonly 'y-offset'?: number;
+  /** Horizontal spacing between repeated items. */
+  readonly 'x-offset'?: number;
+}
+
+/** A text child inside a region, positioned relative to the region origin. */
+export interface RegionTextChild extends TextElement, RegionOffset {}
+
+/** A field child inside a region, positioned relative to the region origin. */
+export type RegionFieldChild = FormFieldElement & RegionOffset;
+
+/** Any element allowed as a direct child of a region. */
+export type RegionChild = RegionTextChild | RegionFieldChild;
+
+/**
+ * A container grouping repeating content bound to an array. (`{.region.*}`)
+ *
+ * Child elements repeat for each item in the bound array; when items exceed
+ * `max`, overflow pages are generated via `overflow`.
+ */
+export interface RegionElement extends BaseElement, Positioned, Sized {
+  readonly type: 'region';
+  /** ODIN path to the array data source (e.g. `@policy.vehicles`). */
+  readonly bind?: string;
+  /** Maximum items before overflow. */
+  readonly max?: number;
+  /** `clone` or a template reference (e.g. `@tpl_vehicles_continued`). */
+  readonly overflow?: string;
+  /** Child elements, repeated per bound item. */
+  readonly children: readonly RegionChild[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page Templates
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A page template (`{@tpl_*}`) — a layout for dynamically generated overflow
+ * pages. Not rendered directly; instantiated when a region overflows.
+ */
+export interface PageTemplate {
+  /** Template name without the `tpl_` prefix stripped (e.g. `tpl_vehicles_continued`). */
+  readonly name: string;
+  /** Always true — marks this as a template, not a concrete page. */
+  readonly pageTemplate: boolean;
+  /** Names the region this template continues (e.g. `region.vehicles`). */
+  readonly continues?: string;
+  /** Form identifier for continuation pages. */
+  readonly formId?: string;
+  /** Elements contained in the template, in document order. */
+  readonly elements: readonly FormElement[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -540,6 +636,19 @@ export type FormElement =
   | TextElement
   | ImageElement
   | BarcodeElement
+  | TextFieldElement
+  | CheckboxElement
+  | RadioElement
+  | SelectElement
+  | MultiselectElement
+  | DateElement
+  | SignatureElement
+  | RegionElement;
+
+/**
+ * Union of all field element interfaces (the `field.*` types).
+ */
+export type FormFieldElement =
   | TextFieldElement
   | CheckboxElement
   | RadioElement

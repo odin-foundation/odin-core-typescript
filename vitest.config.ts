@@ -5,7 +5,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
-    exclude: ['tests/golden/**/*.test.ts', 'tests/forms/**/*.test.ts'],
+    exclude: ['tests/golden/**/*.test.ts'],
     pool: 'threads',
     poolOptions: {
       threads: {
