@@ -103,6 +103,16 @@ export function decodeEscapes(s: string, line: number = 0, column: number = 0, l
           result += '\0';
           i += 2;
           break;
+        case '$':
+          // Literal dollar; preserve the backslash before `${` so the
+          // interpolation layer recognizes the escaped interpolation marker.
+          if (s[i + 2] === '{') {
+            result += '\\$';
+          } else {
+            result += '$';
+          }
+          i += 2;
+          break;
         case 'u': {
           // \uXXXX
           const hex = s.slice(i + 2, i + 6);

@@ -151,6 +151,64 @@ describe('XML CDATA', () => {
   });
 });
 
+describe('Interpolation escapes', () => {
+  it('\\$ emits a literal dollar before an interpolation', () => {
+    const t = `${BASE}\n\n{C}\nprice = "Total: \\$\${@.amount}"\n`;
+    const r = run(t, { amount: '42.00' });
+    expect(JSON.parse(r.formatted)).toEqual({ C: { price: 'Total: $42.00' } });
+  });
+
+  it('\\${ suppresses interpolation and emits a literal marker', () => {
+    const t = `${BASE}\n\n{C}\ntemplate = "Use \\$\{@.field}"\n`;
+    const r = run(t, { field: 'X' });
+    expect(JSON.parse(r.formatted)).toEqual({ C: { template: 'Use ${@.field}' } });
+  });
+
+  it('a bare \\$ outside any interpolation is a literal dollar', () => {
+    const t = `${BASE}\n\n{C}\nlabel = "price is \\$"\n`;
+    const r = run(t, {});
+    expect(JSON.parse(r.formatted)).toEqual({ C: { label: 'price is $' } });
+  });
+});
+
+describe('Prefix coercion on references', () => {
+  it('##@path coerces a copied value to integer', () => {
+    const t = `${BASE}\n\n{C}\nyear = ##@.year\n`;
+    const r = run(t, { year: '2021' });
+    expect((r.output as any).C.year).toEqual({ type: 'integer', value: 2021 });
+    expect(JSON.parse(r.formatted)).toEqual({ C: { year: 2021 } });
+  });
+
+  it('#$@path coerces a copied value to currency', () => {
+    const t = `${BASE}\n\n{C}\npremium = #$@.premium\n`;
+    const r = run(t, { premium: '1499.50' });
+    expect((r.output as any).C.premium).toMatchObject({ type: 'currency', value: 1499.5 });
+  });
+
+  it('#@path coerces a copied integer value to number', () => {
+    const t = `${BASE}\n\n{C}\nrate = #@.rate\n`;
+    const r = run(t, { rate: 3 });
+    expect((r.output as any).C.rate).toEqual({ type: 'number', value: 3 });
+  });
+
+  it('emits coerced ODIN prefixes for json->odin', () => {
+    const odinT = [
+      '{$}',
+      'odin = "1.0.0"',
+      'transform = "1.0.0"',
+      'direction = "json->odin"',
+      'target.format = "odin"',
+      '',
+      '{vehicle}',
+      'year = ##@.year',
+      'premium = #$@.premium',
+    ].join('\n');
+    const r = run(odinT, { year: '2021', premium: '1499.50' });
+    expect(r.formatted).toContain('year = ##2021');
+    expect(r.formatted).toContain('premium = #$1499.50');
+  });
+});
+
 describe('Fixed-width line width', () => {
   it('pads each record to the configured lineWidth using padChar', () => {
     const t = [

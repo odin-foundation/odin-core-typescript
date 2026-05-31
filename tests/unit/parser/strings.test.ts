@@ -70,6 +70,16 @@ describe('String Parsing', () => {
       const doc = Odin.parse('text = "a\\\\\\\\b"');
       expect(doc.getString('text')).toBe('a\\\\b');
     });
+
+    it('should decode \\$ to a literal dollar sign', () => {
+      const doc = Odin.parse('text = "costs \\$5"');
+      expect(doc.getString('text')).toBe('costs $5');
+    });
+
+    it('should preserve the backslash before \\${ for the interpolation layer', () => {
+      const doc = Odin.parse('text = "value \\${name}"');
+      expect(doc.getString('text')).toBe('value \\${name}');
+    });
   });
 
   describe('Unicode Escape Sequences', () => {

@@ -824,7 +824,11 @@ export class Parser {
 
     let value = this.parseValue();
 
-    const directives = this.parseTrailingDirectives();
+    const trailing = this.parseTrailingDirectives();
+    const directives =
+      value.directives && trailing
+        ? [...value.directives, ...trailing]
+        : (trailing ?? value.directives);
     if (hasAnyModifier(modifiers) || directives) {
       value = {
         ...value,
@@ -1040,6 +1044,32 @@ export class Parser {
   }
 
   /**
+   * Parse a reference following a numeric type prefix (e.g. `##@.year`, `#$@.premium`).
+   * Returns the reference with a synthetic `:type` directive that coerces the
+   * resolved value on output. Returns null when no reference follows the prefix.
+   */
+  private parsePrefixedReference(
+    kind: 'number' | 'integer' | 'currency' | 'percent'
+  ): OdinValue | null {
+    if (this.peek().type !== TokenType.PREFIX_REFERENCE) {
+      return null;
+    }
+    this.advance();
+    let path: string;
+    if (this.peek().type === TokenType.PREFIX_META) {
+      this.advance();
+      path = '$' + this.parsePath(true);
+    } else {
+      path = this.parsePath(true);
+    }
+    return {
+      type: 'reference',
+      path,
+      directives: [{ name: 'type', value: kind }],
+    };
+  }
+
+  /**
    * Parse a value.
    */
   private parseValue(): OdinValue {
@@ -1056,21 +1086,29 @@ export class Parser {
 
     if (token.type === TokenType.PREFIX_NUMBER) {
       this.advance();
+      const coerced = this.parsePrefixedReference('number');
+      if (coerced) return coerced;
       return parseTypedNumber('number', this.parseContext);
     }
 
     if (token.type === TokenType.PREFIX_INTEGER) {
       this.advance();
+      const coerced = this.parsePrefixedReference('integer');
+      if (coerced) return coerced;
       return parseTypedNumber('integer', this.parseContext);
     }
 
     if (token.type === TokenType.PREFIX_CURRENCY) {
       this.advance();
+      const coerced = this.parsePrefixedReference('currency');
+      if (coerced) return coerced;
       return parseTypedNumber('currency', this.parseContext);
     }
 
     if (token.type === TokenType.PREFIX_PERCENT) {
       this.advance();
+      const coerced = this.parsePrefixedReference('percent');
+      if (coerced) return coerced;
       return parseTypedNumber('percent', this.parseContext);
     }
 
@@ -1271,16 +1309,19 @@ export class Parser {
       value = { type: 'string', value: this.getTokenVal(token) };
     } else if (token.type === TokenType.PREFIX_NUMBER) {
       this.advance();
-      value = parseTypedNumber('number', this.parseContext);
+      value = this.parsePrefixedReference('number') ?? parseTypedNumber('number', this.parseContext);
     } else if (token.type === TokenType.PREFIX_INTEGER) {
       this.advance();
-      value = parseTypedNumber('integer', this.parseContext);
+      value =
+        this.parsePrefixedReference('integer') ?? parseTypedNumber('integer', this.parseContext);
     } else if (token.type === TokenType.PREFIX_CURRENCY) {
       this.advance();
-      value = parseTypedNumber('currency', this.parseContext);
+      value =
+        this.parsePrefixedReference('currency') ?? parseTypedNumber('currency', this.parseContext);
     } else if (token.type === TokenType.PREFIX_PERCENT) {
       this.advance();
-      value = parseTypedNumber('percent', this.parseContext);
+      value =
+        this.parsePrefixedReference('percent') ?? parseTypedNumber('percent', this.parseContext);
     } else if (token.type === TokenType.NUMBER) {
       this.advance();
       const num = parseFloat(this.getTokenVal(token));
@@ -1317,7 +1358,11 @@ export class Parser {
     }
 
     // Parse trailing directives for this argument (e.g., @_line :pos 3 :len 8)
-    const directives = this.parseTrailingDirectives();
+    const trailing = this.parseTrailingDirectives();
+    const directives =
+      value.directives && trailing
+        ? [...value.directives, ...trailing]
+        : (trailing ?? value.directives);
     if (directives) {
       value = { ...value, directives } as OdinValue;
     }
