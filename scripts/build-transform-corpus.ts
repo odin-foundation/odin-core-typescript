@@ -28,9 +28,20 @@ const FAMILY_TITLES: Record<string, string> = {
   array: 'Array',
   logic: 'Logic & Conditionals',
   lookup: 'Lookup',
+  aggregation: 'Aggregation',
+  financial: 'Financial',
   type: 'Type Coercion',
   encoding: 'Encoding',
+  generation: 'Generation',
+  geo: 'Geo',
+  object: 'Object',
 };
+
+// Families rendered first, in this order; any other family present on disk follows alphabetically.
+const FAMILY_ORDER = [
+  'string', 'numeric', 'date', 'array', 'logic', 'lookup',
+  'aggregation', 'financial', 'type', 'encoding', 'generation', 'geo', 'object',
+];
 
 const PREAMBLE = `<!-- GENERATED FILE — do not edit by hand.
      Source: sdk/golden/transform-corpus/  ·  Generator: sdk/typescript/scripts/build-transform-corpus.ts
@@ -186,13 +197,20 @@ function oneLine(s: string): string {
   return s.replace(/\r\n/g, '\n').replace(/\n+/g, ' → ').trim();
 }
 
+// Families to render: the fixed order first, then any extra family on disk alphabetically.
+function orderedFamilies(verbs: CorpusFixture[]): string[] {
+  const present = new Set(verbs.map((f) => f.family));
+  const ordered = FAMILY_ORDER.filter((f) => present.has(f));
+  const extra = [...present].filter((f) => !FAMILY_ORDER.includes(f)).sort();
+  return [...ordered, ...extra];
+}
+
 function build(): string {
   const loaded = loadFixtures(CORPUS_DIR).map((l) => l.fixture);
-  const manifest = JSON.parse(readFileSync(join(CORPUS_DIR, 'manifest.json'), 'utf8'));
-  const familyOrder: string[] = manifest.familyOrder;
 
   const verbs = loaded.filter((f) => f.family !== 'idiom');
   const idioms = loaded.filter((f) => f.family === 'idiom');
+  const familyOrder = orderedFamilies(verbs);
 
   const parts: string[] = [PREAMBLE.trimEnd(), ''];
 
@@ -252,9 +270,41 @@ function build(): string {
   return parts.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }
 
+// Regenerate manifest.json's fixture/idiom lists and familyOrder from the fixtures on
+// disk, preserving the static metadata and idiom groups. Lets fixtures be authored in
+// parallel without hand-editing the shared manifest.
+function writeManifest(): void {
+  const manifestPath = join(CORPUS_DIR, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const loaded = loadFixtures(CORPUS_DIR);
+
+  const fixtures = loaded
+    .filter((l) => l.fixture.family !== 'idiom')
+    .map((l) => ({ id: l.fixture.id, family: l.fixture.family, path: relPath(l.file) }));
+  const idioms = loaded
+    .filter((l) => l.fixture.family === 'idiom')
+    .map((l) => {
+      const e: Record<string, string> = { id: l.fixture.id, family: 'idiom' };
+      if (l.fixture.group) e.group = l.fixture.group;
+      e.path = relPath(l.file);
+      return e;
+    });
+
+  manifest.fixtures = fixtures;
+  manifest.idioms = idioms;
+  manifest.familyOrder = orderedFamilies(loaded.map((l) => l.fixture).filter((f) => f.family !== 'idiom'));
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  console.log(`wrote ${manifestPath}`);
+}
+
+function relPath(file: string): string {
+  return file.slice(CORPUS_DIR.length + 1).replace(/\\/g, '/');
+}
+
 function main(): void {
   // Touch the header so it is exercised; keeps the runner/generator contract visible.
   void ODIN_HEADER;
+  writeManifest();
   const md = build();
   for (const out of OUT_FILES) {
     mkdirSync(join(out, '..'), { recursive: true });
