@@ -35,6 +35,12 @@ export function formatFixedWidth(
     const segmentPath = segment.path;
     const segmentData = resolvePath(segmentPath, output) ?? output;
 
+    // Literal segment: emit pre-rendered interpolated lines verbatim.
+    if (isLiteralLines(segmentData)) {
+      for (const line of segmentData.__literalLines) lines.push(line);
+      continue;
+    }
+
     if (segment.isArray && Array.isArray(segmentData)) {
       // Array segment: one line per item
       for (const item of segmentData) {
@@ -69,6 +75,15 @@ export function formatFixedWidth(
   }
 
   return lines.join(lineEnding);
+}
+
+/** Pre-rendered literal-block lines emitted by the engine. */
+function isLiteralLines(data: unknown): data is { __literalLines: string[] } {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    Array.isArray((data as { __literalLines?: unknown }).__literalLines)
+  );
 }
 
 /**

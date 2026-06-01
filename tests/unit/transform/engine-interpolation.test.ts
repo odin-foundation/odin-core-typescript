@@ -9,6 +9,8 @@ import {
   parseInlineArgs,
   parseInlineTransformExpression,
   interpolateString,
+  interpolateLiteralBlock,
+  NestedInterpolationError,
 } from '../../../src/transform/engine-interpolation.js';
 import type {
   TransformValue,
@@ -321,5 +323,54 @@ describe('interpolateString', () => {
         expect(result.value).toBe('Value: ');
       }
     });
+  });
+});
+
+describe('interpolateLiteralBlock', () => {
+  it('interpolates a path expression', () => {
+    const ctx = createContext();
+    const resolver = createResolver({ name: str('Alice') });
+    const out = interpolateLiteralBlock('Hi ${@name}', ctx, resolver, createEvaluator({}));
+    expect(out).toBe('Hi Alice');
+  });
+
+  it('interpolates a verb expression', () => {
+    const ctx = createContext();
+    const out = interpolateLiteralBlock(
+      'X=${%upper @a}',
+      ctx,
+      createResolver({}),
+      createEvaluator({ upper: str('ABC') })
+    );
+    expect(out).toBe('X=ABC');
+  });
+
+  it('escapes \\${ to a literal ${', () => {
+    const ctx = createContext();
+    const out = interpolateLiteralBlock(
+      'use \\${@field}',
+      ctx,
+      createResolver({ field: str('NO') }),
+      createEvaluator({})
+    );
+    expect(out).toBe('use ${@field}');
+  });
+
+  it('escapes \\$ to a literal $ and \\\\ to a literal backslash', () => {
+    const ctx = createContext();
+    const out = interpolateLiteralBlock(
+      'a\\$ b\\\\',
+      ctx,
+      createResolver({}),
+      createEvaluator({})
+    );
+    expect(out).toBe('a$ b\\');
+  });
+
+  it('throws NestedInterpolationError on nested ${...}', () => {
+    const ctx = createContext();
+    expect(() =>
+      interpolateLiteralBlock('${@a.${@b}}', ctx, createResolver({}), createEvaluator({}))
+    ).toThrow(NestedInterpolationError);
   });
 });

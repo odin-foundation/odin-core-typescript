@@ -314,6 +314,9 @@ export class Tokenizer {
 
     // Quoted string
     if (code === CHAR_QUOTE) {
+      if (this.peekCode(1) === CHAR_QUOTE && this.peekCode(2) === CHAR_QUOTE) {
+        return this.scanMultilineString();
+      }
       return this.scanQuotedString();
     }
 
@@ -728,6 +731,48 @@ export class Tokenizer {
 
     const value = decodeEscapes(source.slice(contentStart, contentEnd), startLine, startColumn, this.lenient);
     return createToken(TokenType.STRING_QUOTED, value, startLine, startColumn, startPos, this.pos);
+  }
+
+  /**
+   * Scan a triple-quoted multiline string.
+   * Content is captured verbatim and may span newlines; closes at the next `"""`.
+   */
+  private scanMultilineString(): Token {
+    const startLine = this.line;
+    const startColumn = this.column;
+    const startPos = this.pos;
+    const source = this.source;
+    const len = source.length;
+
+    // Consume opening """
+    this.advance();
+    this.advance();
+    this.advance();
+    const contentStart = this.pos;
+
+    while (this.pos < len) {
+      if (
+        source.charCodeAt(this.pos) === CHAR_QUOTE &&
+        this.peekCode(1) === CHAR_QUOTE &&
+        this.peekCode(2) === CHAR_QUOTE
+      ) {
+        const value = source.slice(contentStart, this.pos);
+        this.advance();
+        this.advance();
+        this.advance();
+        return createToken(
+          TokenType.STRING_MULTILINE,
+          value,
+          startLine,
+          startColumn,
+          startPos,
+          this.pos
+        );
+      }
+      this.advancePos();
+    }
+
+    throw new ParseError('Unterminated multiline string', 'P004', startLine, startColumn);
   }
 
   /**

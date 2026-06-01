@@ -57,6 +57,9 @@ export const TransformErrorCodes = {
   /** Field value failed a :validate / :enum / :range constraint */
   T013_VALIDATION_FAILED: 'T013',
 
+  /** Nested ${...} interpolation inside a literal block */
+  T014_NESTED_INTERPOLATION: 'T014',
+
   // Extended codes (implementation-specific)
 
   /** Configuration error - transform document is misconfigured */
@@ -138,6 +141,18 @@ export function danglingBranchError(directive: string, segment?: string): Transf
   const error: TransformError = {
     code: TransformErrorCodes.T012_DANGLING_BRANCH,
     message: `'${directive}' segment has no preceding 'if'`,
+  };
+  if (segment !== undefined) error.segment = segment;
+  return error;
+}
+
+/**
+ * Create a T014 Nested Interpolation error.
+ */
+export function nestedInterpolationError(expr: string, segment?: string): TransformError {
+  const error: TransformError = {
+    code: TransformErrorCodes.T014_NESTED_INTERPOLATION,
+    message: `Nested interpolation is not allowed: \${${expr}}`,
   };
   if (segment !== undefined) error.segment = segment;
   return error;

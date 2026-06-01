@@ -36,6 +36,7 @@ import {
   validationError,
   validationWarning,
   danglingBranchError,
+  nestedInterpolationError,
   TypeValidationError,
   isModifierCompatible,
   invalidModifierWarning,
@@ -44,7 +45,11 @@ import { setNestedValue, getSegmentOutputPath } from './engine-paths.js';
 import { evaluateCondition } from './engine-conditions.js';
 import { parseValueExpression } from './parser-expressions.js';
 import { applyModifiers } from './engine-modifiers.js';
-import { interpolateString } from './engine-interpolation.js';
+import {
+  interpolateString,
+  interpolateLiteralBlock,
+  NestedInterpolationError,
+} from './engine-interpolation.js';
 import { SECURITY_LIMITS } from '../utils/security-limits.js';
 import { odinValueToTransformValue } from './engine-odin-values.js';
 import {
@@ -531,6 +536,12 @@ class TransformEngine {
     // _from directive provides an alternative loop source path
     const fromDirective = segment.directives.find((d) => d.type === 'from');
 
+    // Literal block: emit interpolated text lines instead of field mappings.
+    if (segment.directives.some((d) => d.type === 'literal')) {
+      this.processLiteralSegment(segment, loopDirectives, fromDirective, context, output);
+      return;
+    }
+
     // Computation-only sink: a `_`-prefixed section runs for side effects only
     // (accumulators, verbs) and never appears in the output.
     const isSink = this.isSinkSegment(segment.path);
@@ -569,6 +580,78 @@ class TransformEngine {
     }
   }
 
+  // Render a `:literal` segment to interpolated text lines. The `"""` body's
+  // outermost leading/trailing newline (from delimiters on their own lines) is
+  // trimmed; each remaining source line becomes an output line. Under a `:loop`
+  // the block renders once per item.
+  private processLiteralSegment(
+    segment: TransformSegment,
+    loopDirectives: SegmentDirective[],
+    fromDirective: SegmentDirective | undefined,
+    context: TransformContext,
+    output: Record<string, unknown>
+  ): void {
+    const bodyDir = segment.directives.find((d) => d.type === 'literalBody');
+    const template = this.normalizeLiteralBody(bodyDir?.value ?? '');
+
+    const lines: string[] = [];
+    const render = (ctx: TransformContext): void => {
+      const rendered = this.renderLiteral(template, ctx, segment.path);
+      for (const line of rendered.split('\n')) lines.push(line);
+    };
+
+    if (loopDirectives.length > 0 && segment.isArray) {
+      const counterName = segment.directives.find((d) => d.type === 'counter')?.value;
+      const firstFrom = fromDirective?.value;
+      const results: unknown[] = [];
+      this.iterateLoops(loopDirectives, 0, context, segment, firstFrom, counterName, results, render);
+    } else {
+      render(context);
+    }
+
+    setNestedValue(output, segment.path, { __literalLines: lines });
+  }
+
+  // Strip one leading and one trailing newline so the `"""` delimiters, written
+  // on their own lines, do not contribute blank output lines.
+  private normalizeLiteralBody(body: string): string {
+    let s = body;
+    if (s.startsWith('\r\n')) s = s.slice(2);
+    else if (s.startsWith('\n')) s = s.slice(1);
+    if (s.endsWith('\r\n')) s = s.slice(0, -2);
+    else if (s.endsWith('\n')) s = s.slice(0, -1);
+    return s;
+  }
+
+  private renderLiteral(
+    template: string,
+    context: TransformContext,
+    segmentPath: string
+  ): string {
+    try {
+      return interpolateLiteralBlock(
+        template,
+        context,
+        (path, ctx) => this.resolvePathValue(path, ctx),
+        (e, ctx) => this.evaluateExpression(e, ctx)
+      );
+    } catch (err) {
+      if (err instanceof NestedInterpolationError) {
+        this.errors.push(nestedInterpolationError(err.expr, segmentPath));
+        return '';
+      }
+      // Verb and resolution failures honor the target onError policy.
+      const message = err instanceof Error ? err.message : String(err);
+      const onError = this.transform.target.onError ?? 'fail';
+      if (onError === 'fail') {
+        this.errors.push(transformError(message, segmentPath));
+      } else if (onError === 'warn') {
+        this.warnings.push(transformWarning(message, segmentPath));
+      }
+      return '';
+    }
+  }
+
   // Drive one or more :loop directives as a nested cross-product. Each level binds
   // its alias and current item, then recurses into the next loop; the innermost
   // level emits one result element per item. Relative loop paths (`.field`)
@@ -580,7 +663,8 @@ class TransformEngine {
     segment: TransformSegment,
     firstFrom: string | undefined,
     counterName: string | undefined,
-    results: unknown[]
+    results: unknown[],
+    onItem?: (ctx: TransformContext) => void
   ): void {
     if (context.loopDepth >= SECURITY_LIMITS.MAX_LOOP_NESTING) {
       throw new Error(
@@ -654,7 +738,22 @@ class TransformEngine {
       }
 
       if (!isInnermost) {
-        this.iterateLoops(loops, depth + 1, itemContext, segment, undefined, counterName, results);
+        this.iterateLoops(
+          loops,
+          depth + 1,
+          itemContext,
+          segment,
+          undefined,
+          counterName,
+          results,
+          onItem
+        );
+        continue;
+      }
+
+      // Literal segments render text per item via the callback instead of mappings.
+      if (onItem) {
+        onItem(itemContext);
         continue;
       }
 

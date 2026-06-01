@@ -135,6 +135,108 @@ export function parseInlineTransformExpression(raw: string): ValueExpression | n
  *   evaluateExpression
  * ) // => { type: 'string', value: 'Policy POL123 for John Doe' }
  */
+/**
+ * Signaled when a literal block contains a nested ${...} interpolation.
+ */
+export class NestedInterpolationError extends Error {
+  constructor(public readonly expr: string) {
+    super(`Nested interpolation is not allowed: \${${expr}}`);
+    this.name = 'NestedInterpolationError';
+  }
+}
+
+/**
+ * Interpolate a literal block body.
+ *
+ * Differs from {@link interpolateString} in escape handling and nesting rules:
+ * - `\${` emits a literal `${` (no interpolation)
+ * - `\\` emits a literal `\`
+ * - `\$` emits a literal `$`
+ * - a `${...}` whose expression itself contains `${` is rejected (no nesting)
+ *
+ * @throws {NestedInterpolationError} when an interpolation expression nests another
+ */
+export function interpolateLiteralBlock(
+  template: string,
+  context: TransformContext,
+  resolvePathValue: PathValueResolver,
+  evaluateExpression: ExpressionEvaluator
+): string {
+  let out = '';
+  let i = 0;
+  const len = template.length;
+
+  while (i < len) {
+    const ch = template[i]!;
+
+    if (ch === '\\') {
+      const next = template[i + 1];
+      if (next === '$' && template[i + 2] === '{') {
+        out += '${';
+        i += 3;
+        continue;
+      }
+      if (next === '\\') {
+        out += '\\';
+        i += 2;
+        continue;
+      }
+      if (next === '$') {
+        out += '$';
+        i += 2;
+        continue;
+      }
+      out += '\\';
+      i += 1;
+      continue;
+    }
+
+    if (ch === '$' && template[i + 1] === '{') {
+      const close = template.indexOf('}', i + 2);
+      if (close === -1) {
+        // Unterminated ${ — emit verbatim.
+        out += template.slice(i);
+        break;
+      }
+      const expr = template.slice(i + 2, close);
+      // No nesting: a second `${` inside the expression is an error.
+      if (expr.includes('${')) {
+        throw new NestedInterpolationError(expr);
+      }
+      out += evaluateInterpolationExpr(expr.trim(), context, resolvePathValue, evaluateExpression);
+      i = close + 1;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+
+  return out;
+}
+
+/**
+ * Evaluate a single interpolation expression (path or verb) to a string.
+ */
+function evaluateInterpolationExpr(
+  expr: string,
+  context: TransformContext,
+  resolvePathValue: PathValueResolver,
+  evaluateExpression: ExpressionEvaluator
+): string {
+  if (expr.startsWith('%')) {
+    const verbExpr = parseInlineTransformExpression(expr);
+    if (verbExpr) {
+      return transformValueToString(evaluateExpression(verbExpr, context));
+    }
+    return '${' + expr + '}';
+  }
+  if (expr.startsWith('@')) {
+    return transformValueToString(resolvePathValue(expr.slice(1), context));
+  }
+  return '${' + expr + '}';
+}
+
 export function interpolateString(
   template: string,
   context: TransformContext,

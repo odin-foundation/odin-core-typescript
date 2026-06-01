@@ -564,7 +564,8 @@ class TransformParser {
       case 'loop':
       case 'counter':
       case 'from':
-      case 'literal': {
+      case 'literal':
+      case 'literalBody': {
         // Get the directive value from the document
         const value = this.doc.get(fullPath);
         let valueStr = '';

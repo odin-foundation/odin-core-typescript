@@ -214,6 +214,16 @@ export class Parser {
         continue;
       }
 
+      // Bare multiline-string line (literal block body following `:literal`)
+      if (
+        tokenType === TokenType.STRING_MULTILINE &&
+        !this.state.tableMode &&
+        !this.state.tabularMode
+      ) {
+        this.parseBareLiteralBlock(currentDoc);
+        continue;
+      }
+
       if (this.state.tableMode) {
         if (this.isAssignmentLine()) {
           this.state.tableMode = false;
@@ -776,6 +786,21 @@ export class Parser {
     }
   }
 
+  // Store a bare `"""..."""` body line as a synthetic `<header>._literalBody` assignment,
+  // so the transform layer can pair it with the segment's `:literal` directive.
+  private parseBareLiteralBlock(doc: ParsedDocument): void {
+    const token = this.peek();
+    this.advance();
+    const value = this.getTokenVal(token);
+    const fullPath = this.state.headerPath
+      ? `${this.state.headerPath}._literalBody`
+      : '_literalBody';
+    if (!this.state.assignedPaths.has(fullPath)) {
+      this.state.assignedPaths.add(fullPath);
+      doc.assignments.set(fullPath, { type: 'string', value });
+    }
+  }
+
   private parseAssignment(doc: ParsedDocument): void {
     const startToken = this.peek();
 
@@ -1169,7 +1194,7 @@ export class Parser {
       return { type: 'duration', value: this.getTokenVal(token) };
     }
 
-    if (token.type === TokenType.STRING_QUOTED) {
+    if (token.type === TokenType.STRING_QUOTED || token.type === TokenType.STRING_MULTILINE) {
       this.advance();
       return { type: 'string', value: this.getTokenVal(token) };
     }

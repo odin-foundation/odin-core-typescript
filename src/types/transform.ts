@@ -273,7 +273,7 @@ export interface TransformSegment {
  */
 export interface SegmentDirective {
   /** Directive type */
-  type: 'type' | 'loop' | 'counter' | 'from' | 'if' | 'elif' | 'else' | 'literal';
+  type: 'type' | 'loop' | 'counter' | 'from' | 'if' | 'elif' | 'else' | 'literal' | 'literalBody';
 
   /** Directive value */
   value: string;

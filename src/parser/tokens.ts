@@ -87,6 +87,7 @@ export const enum TokenType {
   // Values (60-79)
   STRING_BARE = 60, // unquoted string
   STRING_QUOTED = 61, // "quoted string"
+  STRING_MULTILINE = 69, // """multiline string"""
   NUMBER = 62, // numeric value
   BOOLEAN = 63, // true, false
   DATE = 64, // 2024-06-15
