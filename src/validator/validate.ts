@@ -40,6 +40,71 @@ const defaultOptions: Required<ValidateOptions> = {
 };
 
 /**
+ * Cached schema-only results, independent of any document.
+ */
+interface SchemaMemo {
+  typeRegistry: TypeRegistry | undefined;
+  errors: ValidationError[]; // V017 + V012/V013
+  warnings: ValidationWarning[]; // W001 from composition expansion
+  expandedFields: Map<string, SchemaField>;
+}
+
+/**
+ * Memoize schema-only work keyed by the schema instance.
+ */
+const schemaMemoCache = new WeakMap<OdinSchema, SchemaMemo>();
+
+/**
+ * Compute (or reuse) schema-only results: schema-definition errors, type-reference
+ * errors, the composition-expanded field map, and composition warnings. Reused
+ * across every document validated against the same schema (and registry).
+ */
+function getSchemaMemo(
+  schema: OdinSchema,
+  typeRegistry: TypeRegistry | undefined
+): SchemaMemo {
+  const cached = schemaMemoCache.get(schema);
+  if (cached && cached.typeRegistry === typeRegistry) {
+    return cached;
+  }
+
+  const memoCtx: ValidationContext = {
+    doc: emptyDoc,
+    schema,
+    options: defaultOptions,
+    errors: [],
+    warnings: [],
+    visitedRefs: new Set(),
+    typeRegistry,
+  };
+
+  validateSchemaDefinition({
+    schema: memoCtx.schema,
+    typeRegistry: memoCtx.typeRegistry,
+    errors: memoCtx.errors,
+  });
+  validateSchemaTypeReferences(memoCtx);
+  const expandedFields = expandSchemaFields(memoCtx);
+
+  const memo: SchemaMemo = {
+    typeRegistry,
+    errors: memoCtx.errors,
+    warnings: memoCtx.warnings,
+    expandedFields,
+  };
+  schemaMemoCache.set(schema, memo);
+  return memo;
+}
+
+/**
+ * Shared empty document for schema-only computation that never reads values.
+ */
+const emptyDoc: OdinDocument = {
+  get: () => undefined,
+  paths: () => [],
+} as unknown as OdinDocument;
+
+/**
  * Internal state during validation.
  */
 interface ValidationContext {
@@ -78,12 +143,16 @@ export function validate(
     typeRegistry,
   };
 
-  // Validate the schema definition itself (override, intersection, tabular, defaults)
-  validateSchemaDefinition({
-    schema: ctx.schema,
-    typeRegistry: ctx.typeRegistry,
-    errors: ctx.errors,
-  });
+  // Schema-only results are computed once per schema and reused across documents.
+  const memo = getSchemaMemo(schema, typeRegistry);
+
+  // Append clones of cached schema-level errors/warnings (callers may mutate results).
+  for (const error of memo.errors) {
+    ctx.errors.push({ ...error });
+  }
+  for (const warning of memo.warnings) {
+    ctx.warnings.push({ ...warning });
+  }
 
   if (opts.failFast && ctx.errors.length > 0) {
     return createResult(ctx);
@@ -92,15 +161,12 @@ export function validate(
   // First, validate all references are resolvable and non-circular
   validateReferences(ctx);
 
-  // Validate schema-level type references (cycles and unresolved types)
-  validateSchemaTypeReferences(ctx);
-
   if (opts.failFast && ctx.errors.length > 0) {
     return createResult(ctx);
   }
 
-  // Expand type compositions (e.g., billing._composition: @address -> billing.line1, billing.city, etc.)
-  const expandedFields = expandTypeCompositions(ctx);
+  // Augment cached schema fields with document-dependent type-ref compositions.
+  const expandedFields = augmentWithPresentCompositions(ctx, memo.expandedFields);
 
   // Validate each field defined in the schema
   for (const [path, fieldSchema] of expandedFields) {
@@ -150,7 +216,7 @@ export function validate(
  * Example with import: billing._composition: @types.address -> billing.line1, etc.
  * Example with override: billing._composition: @address :override -> allows billing.line1 override
  */
-function expandTypeCompositions(ctx: ValidationContext): Map<string, SchemaField> {
+function expandSchemaFields(ctx: ValidationContext): Map<string, SchemaField> {
   const result = new Map<string, SchemaField>();
 
   // Track composition overrides by parent path
@@ -214,10 +280,23 @@ function expandTypeCompositions(ctx: ValidationContext): Map<string, SchemaField
     result.set(path, field);
   }
 
-  // Third pass: a field typed as `@SomeType` (typeRef or a reference resolving to
-  // a defined type) enforces that type's fields under the field path, like header
-  // composition. Only applied when the sub-object is present or the field is required.
-  for (const [path, field] of [...result]) {
+  return result;
+}
+
+/**
+ * Augment cached schema fields with type-ref compositions that depend on the
+ * document: a field typed as `@SomeType` enforces that type's fields under the
+ * field path when the sub-object is present or the field is required.
+ *
+ * Returns a fresh map; the cached base map is never mutated.
+ */
+function augmentWithPresentCompositions(
+  ctx: ValidationContext,
+  baseFields: Map<string, SchemaField>
+): Map<string, SchemaField> {
+  const result = new Map(baseFields);
+
+  for (const [path, field] of baseFields) {
     if (path.endsWith('._composition')) continue;
 
     const refName =
