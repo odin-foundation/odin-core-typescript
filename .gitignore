@@ -25,7 +25,8 @@ tests/schema-api/
 
 # Debug and scratch
 debug-output/
-scripts/
+scripts/*
+!scripts/build-transform-corpus.ts
 
 # IDE
 .idea/
