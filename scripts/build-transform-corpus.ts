@@ -197,6 +197,33 @@ function oneLine(s: string): string {
   return s.replace(/\r\n/g, '\n').replace(/\n+/g, ' → ').trim();
 }
 
+function renderErrorCard(f: CorpusFixture): string {
+  const lines: string[] = [];
+  lines.push(`### ${stripVerb(f.title)}`);
+  lines.push('');
+  lines.push(f.purpose);
+  lines.push('');
+  if (f.trigger) lines.push(`**Trigger:** ${f.trigger}`);
+  if (f.trigger) lines.push('');
+  lines.push('**Transform**');
+  lines.push('');
+  lines.push(fence('odin', f.transform));
+  lines.push('');
+  if (f.fix) {
+    lines.push(`**Fix:** ${f.fix}`);
+    lines.push('');
+  }
+  if (f.enforced === false) {
+    lines.push('> **Note:** documented in the spec but the engine does not yet emit this stable code; see the notes below.');
+    lines.push('');
+  }
+  if (f.notes?.length) {
+    for (const n of f.notes) lines.push(`- ${n}`);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
 // Families to render: the fixed order first, then any extra family on disk alphabetically.
 function orderedFamilies(verbs: CorpusFixture[]): string[] {
   const present = new Set(verbs.map((f) => f.family));
@@ -208,8 +235,9 @@ function orderedFamilies(verbs: CorpusFixture[]): string[] {
 function build(): string {
   const loaded = loadFixtures(CORPUS_DIR).map((l) => l.fixture);
 
-  const verbs = loaded.filter((f) => f.family !== 'idiom');
+  const verbs = loaded.filter((f) => f.family !== 'idiom' && f.family !== 'error');
   const idioms = loaded.filter((f) => f.family === 'idiom');
+  const errors = loaded.filter((f) => f.family === 'error');
   const familyOrder = orderedFamilies(verbs);
 
   const parts: string[] = [PREAMBLE.trimEnd(), ''];
@@ -262,10 +290,16 @@ function build(): string {
 
   parts.push('## Error catalog');
   parts.push('');
-  parts.push('A catalog of common transform errors and their fixes.');
+  parts.push('Each transform error code, the minimal mistake that triggers it, and the fix.');
   parts.push('');
-  parts.push('<!-- PLACEHOLDER: error catalog to be filled later. -->');
-  parts.push('');
+  const orderedErrors = [...errors].sort((a, b) => (a.code ?? '').localeCompare(b.code ?? ''));
+  for (const f of orderedErrors) {
+    parts.push(renderErrorCard(f));
+  }
+  if (!orderedErrors.length) {
+    parts.push('<!-- PLACEHOLDER: error catalog to be filled later. -->');
+    parts.push('');
+  }
 
   return parts.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }
@@ -278,8 +312,9 @@ function writeManifest(): void {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const loaded = loadFixtures(CORPUS_DIR);
 
+  const isVerb = (fam: string) => fam !== 'idiom' && fam !== 'error';
   const fixtures = loaded
-    .filter((l) => l.fixture.family !== 'idiom')
+    .filter((l) => isVerb(l.fixture.family))
     .map((l) => ({ id: l.fixture.id, family: l.fixture.family, path: relPath(l.file) }));
   const idioms = loaded
     .filter((l) => l.fixture.family === 'idiom')
@@ -289,10 +324,14 @@ function writeManifest(): void {
       e.path = relPath(l.file);
       return e;
     });
+  const errors = loaded
+    .filter((l) => l.fixture.family === 'error')
+    .map((l) => ({ id: l.fixture.id, family: 'error', code: l.fixture.code ?? '', path: relPath(l.file) }));
 
   manifest.fixtures = fixtures;
   manifest.idioms = idioms;
-  manifest.familyOrder = orderedFamilies(loaded.map((l) => l.fixture).filter((f) => f.family !== 'idiom'));
+  manifest.errors = errors;
+  manifest.familyOrder = orderedFamilies(loaded.map((l) => l.fixture).filter((f) => isVerb(f.family)));
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
   console.log(`wrote ${manifestPath}`);
 }

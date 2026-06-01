@@ -21,11 +21,29 @@ describe('Golden: Transform Corpus', () => {
   for (const { fixture, file } of fixtures) {
     it(`${fixture.family}/${fixture.id}`, () => {
       const transformText = headerFor(fixture) + fixture.transform;
-      const transform = parseTransform(transformText);
-
       const source = Odin.parse(fixture.input).toJSON();
-      const result = executeTransform(transform, source);
 
+      // Error fixtures: assert the declared T-code surfaces (thrown, or in
+      // result.errors/warnings). Fixtures marked enforced:false are documented
+      // gaps the engine does not yet emit — rendered in the catalog, not asserted.
+      if (fixture.family === 'error') {
+        if (fixture.enforced === false) return;
+        const code = fixture.code!;
+        const fmt = (xs?: Array<{ code?: string; message?: string }>) =>
+          (xs || []).map((e) => `${e.code} ${e.message}`).join('\n');
+        let surfaced = '';
+        try {
+          const result = executeTransform(parseTransform(transformText), source);
+          surfaced = fmt(result.errors as never) + '\n' + fmt((result as { warnings?: never }).warnings);
+        } catch (e) {
+          const err = e as { message?: string; code?: string };
+          surfaced = `${err.code ?? ''} ${err.message ?? ''}`;
+        }
+        expect(surfaced, `${code} not surfaced in ${file}`).toContain(code);
+        return;
+      }
+
+      const result = executeTransform(parseTransform(transformText), source);
       expect(result.errors || [], `errors in ${file}`).toHaveLength(0);
 
       const actual = (result.formatted || '').replace(/\r\n/g, '\n').trimEnd();
@@ -39,7 +57,9 @@ describe('Golden: Transform Corpus', () => {
 describe('Golden: Transform Corpus manifest', () => {
   it('lists every fixture file', () => {
     const manifest = JSON.parse(readFileSync(join(CORPUS_DIR, 'manifest.json'), 'utf8'));
-    const declared = [...manifest.fixtures, ...manifest.idioms].map((f: { id: string }) => f.id).sort();
+    const declared = [...manifest.fixtures, ...manifest.idioms, ...(manifest.errors || [])]
+      .map((f: { id: string }) => f.id)
+      .sort();
     const found = fixtures.map((f) => f.fixture.id).sort();
     expect(found).toEqual(declared);
   });
