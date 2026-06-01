@@ -28,6 +28,7 @@ import {
   addWarning,
 } from './validate-constraints.js';
 import { validateTypeFromRegistry, type TypeValidationContext } from './type-validators.js';
+import { validateSchemaDefinition } from './validate-schema-def.js';
 
 /**
  * Default validation options.
@@ -76,6 +77,17 @@ export function validate(
     visitedRefs: new Set(),
     typeRegistry,
   };
+
+  // Validate the schema definition itself (override, intersection, tabular, defaults)
+  validateSchemaDefinition({
+    schema: ctx.schema,
+    typeRegistry: ctx.typeRegistry,
+    errors: ctx.errors,
+  });
+
+  if (opts.failFast && ctx.errors.length > 0) {
+    return createResult(ctx);
+  }
 
   // First, validate all references are resolvable and non-circular
   validateReferences(ctx);

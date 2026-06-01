@@ -6,6 +6,7 @@ import type { OdinValue } from '../types/values.js';
 import type { SchemaField, ValidationError, ValidationWarning } from '../types/schema.js';
 import { FORMAT_VALIDATORS } from './format-validators.js';
 import { isUnsafeRegexPattern, safeRegexTest, MAX_REGEX_EXECUTION_MS } from './validate-redos.js';
+import { evaluateInvariant, type FieldResolver } from './invariant-evaluator.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constraint Validation Context
@@ -116,8 +117,13 @@ export function validateBounds(
   value: OdinValue,
   constraint: { kind: 'bounds'; min?: number | string; max?: number | string }
 ): void {
-  // Accept number, integer, and currency types for numeric bounds
-  if (value.type === 'number' || value.type === 'integer' || value.type === 'currency') {
+  // Accept number, integer, currency, and percent types for numeric bounds
+  if (
+    value.type === 'number' ||
+    value.type === 'integer' ||
+    value.type === 'currency' ||
+    value.type === 'percent'
+  ) {
     const num = value.value;
     if (constraint.min !== undefined && num < (constraint.min as number)) {
       addError(ctx, path, 'V003', `Value below minimum`, `>= ${constraint.min}`, num);
@@ -391,7 +397,10 @@ export function validateCardinality(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Validate invariant constraint (simple expression evaluation).
+ * Validate invariant constraint by evaluating its full expression grammar.
+ *
+ * A null operand makes the expression false (V008). Absent operands make the
+ * invariant inapplicable. A malformed expression is reported as V008.
  */
 export function validateInvariant(
   ctx: CardinalityValidationContext,
@@ -400,195 +409,32 @@ export function validateInvariant(
 ): void {
   const expr = constraint.expression.trim();
 
-  // Spec: any null operand makes the expression evaluate to false.
-  if (hasNullOperand(ctx, path, expr)) {
-    addError(ctx, path, 'V008', `Invariant violation: ${expr}`, `${expr} to be true`, 'null operand');
+  const resolve: FieldResolver = (name) => {
+    const fullPath = path ? `${path}.${name}` : name;
+    return ctx.doc.get(fullPath);
+  };
+
+  let result;
+  try {
+    result = evaluateInvariant(expr, resolve);
+  } catch {
+    addError(ctx, path, 'V008', `Invalid invariant expression: ${expr}`, `${expr} to be valid`, 'parse error');
     return;
   }
 
-  // Try arithmetic equality: field = expr1 op expr2 (e.g., "total = subtotal + tax")
-  const arithmeticMatch = expr.match(/^(\w+)\s*=\s*(\w+)\s*([+\-*/])\s*(\w+)$/);
-  if (arithmeticMatch) {
-    const lhsField = arithmeticMatch[1]!;
-    const rhsField1 = arithmeticMatch[2]!;
-    const arithOp = arithmeticMatch[3]!;
-    const rhsField2 = arithmeticMatch[4]!;
-
-    const lhsValue = resolveNumericValue(ctx, path, lhsField);
-    const rhs1Value = resolveNumericValue(ctx, path, rhsField1);
-    const rhs2Value = resolveNumericValue(ctx, path, rhsField2);
-
-    if (lhsValue === undefined || rhs1Value === undefined || rhs2Value === undefined) {
-      return; // Fields missing, invariant doesn't apply
-    }
-
-    let rhsResult: number;
-    switch (arithOp) {
-      case '+': rhsResult = rhs1Value + rhs2Value; break;
-      case '-': rhsResult = rhs1Value - rhs2Value; break;
-      case '*': rhsResult = rhs1Value * rhs2Value; break;
-      case '/': rhsResult = rhs2Value !== 0 ? rhs1Value / rhs2Value : NaN; break;
-      default: return;
-    }
-
-    // Use approximate equality for floating point
-    if (Math.abs(lhsValue - rhsResult) > 0.001) {
-      addError(ctx, path, 'V008', `Invariant violation: ${expr}`, `${expr} to be true`, 'false');
-    }
+  // Absent operands: invariant does not apply.
+  if (result.value === undefined && !result.nullOperand) {
     return;
   }
 
-  // Try simple comparison: field OP value_or_field
-  const comparisonMatch = expr.match(/^(\w+)\s*(>=|<=|>|<|==|!=|=)\s*(.+)$/);
-  if (comparisonMatch) {
-    const fieldName = comparisonMatch[1]!;
-    const operator = comparisonMatch[2]!;
-    const compareExpr = comparisonMatch[3]!.trim();
-
-    const fullPath = path ? `${path}.${fieldName}` : fieldName;
-    const value = ctx.doc.get(fullPath);
-
-    if (value === undefined) {
-      return; // Field doesn't exist, invariant doesn't apply
-    }
-
-    // Check if compare value is a field reference or a literal
-    const compareFieldPath = path ? `${path}.${compareExpr}` : compareExpr;
-    const compareFieldValue = ctx.doc.get(compareFieldPath);
-
-    if (compareFieldValue !== undefined) {
-      // Field-to-field comparison
-      const passes = evaluateFieldComparison(value, operator, compareFieldValue);
-      if (!passes) {
-        addError(ctx, path, 'V008', `Invariant violation: ${expr}`, `${expr} to be true`, 'false');
-      }
-    } else {
-      // Literal comparison
-      const passes = evaluateComparison(value, operator, compareExpr);
-      if (!passes) {
-        addError(ctx, path, 'V008', `Invariant violation: ${expr}`, `${expr} to be true`, 'false');
-      }
-    }
-  }
-}
-
-/**
- * Reserved words in invariant expressions that are not field operands.
- */
-const INVARIANT_KEYWORDS = new Set(['true', 'false']);
-
-/**
- * Determine whether any field operand referenced by the expression is present
- * in the document with a null value. Absent fields are not treated as null
- * operands (their absence is handled by field-level required validation).
- */
-function hasNullOperand(
-  ctx: CardinalityValidationContext,
-  path: string,
-  expr: string
-): boolean {
-  // Operands are identifiers (optionally dotted); skip numeric literals.
-  const tokens = expr.match(/[A-Za-z_][A-Za-z0-9_.]*/g);
-  if (!tokens) return false;
-
-  for (const token of tokens) {
-    if (INVARIANT_KEYWORDS.has(token)) continue;
-    const fullPath = path ? `${path}.${token}` : token;
-    const value = ctx.doc.get(fullPath);
-    if (value !== undefined && value.type === 'null') {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Resolve a numeric value from a field name or literal.
- */
-function resolveNumericValue(
-  ctx: CardinalityValidationContext,
-  path: string,
-  fieldOrLiteral: string
-): number | undefined {
-  const fullPath = path ? `${path}.${fieldOrLiteral}` : fieldOrLiteral;
-  const value = ctx.doc.get(fullPath);
-  if (value !== undefined) {
-    if (value.type === 'number' || value.type === 'integer' || value.type === 'currency') {
-      return value.value;
-    }
-    return undefined;
-  }
-  // Try as literal number
-  const num = parseFloat(fieldOrLiteral);
-  return isNaN(num) ? undefined : num;
-}
-
-/**
- * Evaluate a field-to-field comparison.
- */
-function evaluateFieldComparison(left: OdinValue, operator: string, right: OdinValue): boolean {
-  const leftNum = (left.type === 'number' || left.type === 'integer' || left.type === 'currency')
-    ? left.value : undefined;
-  const rightNum = (right.type === 'number' || right.type === 'integer' || right.type === 'currency')
-    ? right.value : undefined;
-
-  if (leftNum !== undefined && rightNum !== undefined) {
-    switch (operator) {
-      case '>': return leftNum > rightNum;
-      case '>=': return leftNum >= rightNum;
-      case '<': return leftNum < rightNum;
-      case '<=': return leftNum <= rightNum;
-      case '==': case '=': return Math.abs(leftNum - rightNum) < 0.001;
-      case '!=': return Math.abs(leftNum - rightNum) >= 0.001;
-      default: return true;
-    }
-  }
-
-  // String comparison
-  if (left.type === 'string' && right.type === 'string') {
-    switch (operator) {
-      case '>': return left.value > right.value;
-      case '>=': return left.value >= right.value;
-      case '<': return left.value < right.value;
-      case '<=': return left.value <= right.value;
-      case '==': case '=': return left.value === right.value;
-      case '!=': return left.value !== right.value;
-      default: return true;
-    }
-  }
-
-  return true; // Can't compare different types, skip
-}
-
-/**
- * Evaluate a simple comparison against a literal.
- */
-function evaluateComparison(value: OdinValue, operator: string, compareValue: string): boolean {
-  // Check for numeric types (number, integer, currency)
-  const isNumeric =
-    value.type === 'number' || value.type === 'integer' || value.type === 'currency';
-  if (!isNumeric && value.type !== 'string') {
-    return true; // Can't compare, skip
-  }
-
-  const actual = isNumeric ? value.value : value.value;
-  const expected = isNumeric ? parseFloat(compareValue) : compareValue.replace(/^["']|["']$/g, '');
-
-  switch (operator) {
-    case '>':
-      return actual > expected;
-    case '>=':
-      return actual >= expected;
-    case '<':
-      return actual < expected;
-    case '<=':
-      return actual <= expected;
-    case '==':
-    case '=':
-      return actual === expected;
-    case '!=':
-      return actual !== expected;
-    default:
-      return true;
+  if (result.value === false) {
+    addError(
+      ctx,
+      path,
+      'V008',
+      `Invariant violation: ${expr}`,
+      `${expr} to be true`,
+      result.nullOperand ? 'null operand' : 'false'
+    );
   }
 }

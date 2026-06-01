@@ -100,6 +100,10 @@ export const ValidationErrorCodes = {
   V011: 'Unknown field',
   V012: 'Circular reference',
   V013: 'Unresolved reference',
+  V014: 'Unsafe regex pattern',
+  V015: 'Invalid regex pattern',
+  V016: 'Pattern validation timeout',
+  V017: 'Schema definition error',
 } as const;
 
 export type ParseErrorCode = keyof typeof ParseErrorCodes;

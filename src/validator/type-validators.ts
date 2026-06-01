@@ -129,7 +129,24 @@ registerTypeValidator('decimal', (ctx, value, schemaType) => {
     }
   }
 });
-registerTypeValidator('currency', simpleTypeValidator('currency'));
+registerTypeValidator('currency', (ctx, value, schemaType) => {
+  if (value.type !== 'currency') {
+    ctx.addError('V002', `Type mismatch: expected currency`, 'currency', value.type);
+    return;
+  }
+  // Enforce exact decimal places when specified (#$.N)
+  if (schemaType.kind === 'currency' && schemaType.places !== undefined) {
+    const actualPlaces = (value as { decimalPlaces?: number }).decimalPlaces;
+    if (actualPlaces !== undefined && actualPlaces !== schemaType.places) {
+      ctx.addError(
+        'V003',
+        `Currency decimal places mismatch: expected exactly ${schemaType.places}`,
+        schemaType.places,
+        actualPlaces
+      );
+    }
+  }
+});
 registerTypeValidator('date', simpleTypeValidator('date'));
 registerTypeValidator('timestamp', simpleTypeValidator('timestamp'));
 registerTypeValidator('time', simpleTypeValidator('time'));
