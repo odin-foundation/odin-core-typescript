@@ -361,13 +361,6 @@ describe('parseForm — inline text parsing', () => {
     expect(form.screen?.scale).toBe(1.5);
   });
 
-  it('parses optional odincode settings', () => {
-    const text = `{$}\ntitle = "T"\nid = "i"\nlang = "en"\n{$.odincode}\nenabled = ?true\nzone = "bottom-center"`;
-    const form = parseForm(text);
-    expect(form.odincode?.enabled).toBe(true);
-    expect(form.odincode?.zone).toBe('bottom-center');
-  });
-
   it('parses a multi-page form', () => {
     const text = `
 {$}

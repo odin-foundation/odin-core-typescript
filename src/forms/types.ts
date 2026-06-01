@@ -24,8 +24,6 @@ export interface OdinForm {
   readonly pageDefaults?: PageDefaults;
   /** Screen rendering options (`{$.screen}`). Optional. */
   readonly screen?: ScreenSettings;
-  /** Self-digitizing barcode settings (`{$.odincode}`). Optional. */
-  readonly odincode?: OdincodeSettings;
   /** Multi-language label dictionary (`{$.i18n}`). Optional. */
   readonly i18n?: Record<string, string>;
   /** Ordered list of form pages (`page[0]`, `page[1]`, ...). */
@@ -85,24 +83,6 @@ export interface PageMargins {
 export interface ScreenSettings {
   /** Default zoom factor. 1.0 = 100% (no scaling). */
   readonly scale: number;
-}
-
-/**
- * Self-digitizing barcode settings for the Odincode feature.
- * Corresponds to `{$.odincode}`.
- *
- * When enabled, the renderer generates a PDF417 barcode containing
- * the page's filled field data as raw ODIN text.
- */
-export interface OdincodeSettings {
-  /** Whether Odincode generation is enabled. */
-  readonly enabled: boolean;
-  /**
-   * Placement zone for the barcode.
-   * - `top-center`: 0.25" from the top edge, horizontally centered.
-   * - `bottom-center`: 0.25" from the bottom edge, horizontally centered.
-   */
-  readonly zone: 'top-center' | 'bottom-center';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

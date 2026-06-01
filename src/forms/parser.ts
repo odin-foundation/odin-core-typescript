@@ -15,7 +15,6 @@ import type {
   PageDefaults,
   PageMargins,
   ScreenSettings,
-  OdincodeSettings,
   FormPage,
   FormElement,
   LineElement,
@@ -61,7 +60,6 @@ export function parseForm(text: string): OdinForm {
   const metadata = extractMetadata(doc);
   const pageDefaults = extractPageDefaults(doc);
   const screen = extractScreen(doc);
-  const odincode = extractOdincode(doc);
   const i18n = extractI18n(doc);
   const pages = extractPages(doc, i18n);
   const templates = extractTemplates(templateBlocks, i18n);
@@ -70,7 +68,6 @@ export function parseForm(text: string): OdinForm {
     metadata,
     ...(pageDefaults !== undefined && { pageDefaults }),
     ...(screen !== undefined && { screen }),
-    ...(odincode !== undefined && { odincode }),
     ...(i18n !== undefined && { i18n }),
     pages,
     ...(templates !== undefined && { templates }),
@@ -261,22 +258,6 @@ function extractScreen(doc: OdinDocument): ScreenSettings | undefined {
   const scale = getNumberValue(doc, '$.screen.scale');
   if (scale === undefined) return undefined;
   return { scale };
-}
-
-function extractOdincode(doc: OdinDocument): OdincodeSettings | undefined {
-  const enabled = getBooleanValue(doc, '$.odincode.enabled');
-  const zone = getStringValue(doc, '$.odincode.zone');
-  if (enabled === undefined && zone === undefined) return undefined;
-
-  const validZones = ['top-center', 'bottom-center'] as const;
-  const resolvedZone = validZones.includes(zone as (typeof validZones)[number])
-    ? (zone as OdincodeSettings['zone'])
-    : 'bottom-center';
-
-  return {
-    enabled: enabled ?? false,
-    zone: resolvedZone,
-  };
 }
 
 function extractI18n(doc: OdinDocument): Record<string, string> | undefined {

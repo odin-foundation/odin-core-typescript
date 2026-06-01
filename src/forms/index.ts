@@ -25,7 +25,6 @@ export type {
   PageDefaults,
   PageMargins,
   ScreenSettings,
-  OdincodeSettings,
   FormPage,
   ElementType,
   BaseElement,
