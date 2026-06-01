@@ -18,6 +18,7 @@ export { normalizeToOdin } from './cdm-normalizer.js';
 
 // Import formatters from individual modules
 import { normalizeToOdin } from './cdm-normalizer.js';
+import { invalidOutputFormatError } from './errors.js';
 import type { FormatterOptions } from './formatters/types.js';
 import { formatJsonFromOdin } from './formatters/json-formatter.js';
 import { formatXmlFromOdin } from './formatters/xml-formatter.js';
@@ -131,6 +132,11 @@ export function formatOutput(
     return formatter(context);
   }
 
-  // Default: JSON stringify the canonical form
-  return JSON.stringify(odinDoc.toJSON(), null, 2);
+  // Unknown target format: T006. Report via callback when provided, else throw.
+  const error = invalidOutputFormatError(transform.target.format);
+  if (options.onError) {
+    options.onError(error);
+    return '';
+  }
+  throw new Error(error.message);
 }

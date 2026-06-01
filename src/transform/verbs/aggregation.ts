@@ -6,6 +6,7 @@
 
 import type { VerbFunction, TransformValue } from '../../types/transform.js';
 import { resolvePath } from '../utils.js';
+import { accumulatorOverflowError } from '../errors.js';
 import {
   toString,
   toNumber,
@@ -66,8 +67,20 @@ export const accumulate: VerbFunction = (args, context) => {
   // Add the value to the current accumulator
   const currentNum = toNumber(current);
   const addNum = toNumber(value);
-  const newValue = numericResult(currentNum + addNum);
+  const sum = currentNum + addNum;
 
+  // T008: the result exceeds representable numeric capacity (non-finite, or an
+  // integer accumulator beyond MAX_SAFE_INTEGER where precision is lost).
+  const integerAccumulator = current.type === 'integer';
+  const overflowed =
+    !Number.isFinite(sum) ||
+    (integerAccumulator && Math.abs(sum) > Number.MAX_SAFE_INTEGER);
+  if (overflowed) {
+    (context.errors ??= []).push(accumulatorOverflowError(name, sum));
+    return current;
+  }
+
+  const newValue = numericResult(sum);
   context.accumulators.set(name, newValue);
   return newValue;
 };

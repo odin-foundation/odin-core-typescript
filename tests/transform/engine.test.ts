@@ -633,6 +633,33 @@ status = "active"
 
       expect(result.success).toBe(false);
       expect(result.errors.length).toBeGreaterThan(0);
+      // A required field whose source path is absent surfaces T005 (source path
+      // not found); SOURCE_MISSING is reserved for a path present but null.
+      expect(result.errors[0]?.code).toBe('T005');
+    });
+
+    it('reports SOURCE_MISSING when a required field is present but null', () => {
+      const transform = createTransform(
+        [
+          {
+            path: 'result',
+            isArray: false,
+            directives: [],
+            mappings: [
+              {
+                target: 'required_field',
+                value: copy('present'),
+                modifiers: [{ name: 'required' }],
+              },
+            ],
+          },
+        ],
+        { onError: 'fail' }
+      );
+
+      const result = executeTransform(transform, { present: null });
+
+      expect(result.success).toBe(false);
       expect(result.errors[0]?.code).toBe('SOURCE_MISSING');
     });
 

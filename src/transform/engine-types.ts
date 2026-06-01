@@ -13,6 +13,12 @@ export interface TransformOptions {
   verbRegistry?: VerbRegistry;
   /** Enable strict type checking for verb arguments */
   strictTypes?: boolean;
+  /**
+   * Resolves an @import path to ODIN transform text. Imported lookup tables,
+   * constants, accumulators, and named segments are merged into the transform
+   * before execution. Returning undefined leaves that import unresolved.
+   */
+  importResolver?: (path: string) => string | undefined;
 }
 
 /**

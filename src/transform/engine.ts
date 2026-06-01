@@ -38,12 +38,16 @@ import {
   danglingBranchError,
   nestedInterpolationError,
   TypeValidationError,
+  CodedTransformError,
+  sourcePathNotFoundError,
+  loopSourceNotArrayError,
   isModifierCompatible,
   invalidModifierWarning,
 } from './errors.js';
 import { setNestedValue, getSegmentOutputPath } from './engine-paths.js';
 import { evaluateCondition } from './engine-conditions.js';
 import { parseValueExpression } from './parser-expressions.js';
+import { parseTransform } from './parser.js';
 import { applyModifiers } from './engine-modifiers.js';
 import {
   interpolateString,
@@ -144,6 +148,41 @@ class TransformEngine {
     this.verbRegistry = options?.verbRegistry ?? defaultVerbRegistry;
     // strictTypes can be set via options or via transform header
     this.strictTypes = options?.strictTypes ?? this.transform.strictTypes ?? false;
+
+    if (options?.importResolver && this.transform.imports.length > 0) {
+      this.resolveImports(options.importResolver);
+    }
+  }
+
+  // Merge imported lookup tables, constants, accumulators, and named segments
+  // into this transform. Local declarations win over imported ones; imported
+  // segments are appended so their mappings remain referenceable.
+  private resolveImports(resolver: (path: string) => string | undefined): void {
+    const seen = new Set<string>();
+    for (const imp of this.transform.imports) {
+      if (seen.has(imp.path)) continue;
+      seen.add(imp.path);
+
+      const text = resolver(imp.path);
+      if (text === undefined) continue;
+
+      const imported = parseTransform(text);
+
+      for (const [name, table] of imported.tables) {
+        if (!this.transform.tables.has(name)) this.transform.tables.set(name, table);
+      }
+      for (const [name, value] of imported.constants) {
+        if (!this.transform.constants.has(name)) this.transform.constants.set(name, value);
+      }
+      for (const [name, def] of imported.accumulators) {
+        if (!this.transform.accumulators.has(name)) this.transform.accumulators.set(name, def);
+      }
+      const existingPaths = new Set(this.transform.segments.map((s) => s.path));
+      for (const segment of imported.segments) {
+        if (segment.path === '' || existingPaths.has(segment.path)) continue;
+        this.transform.segments.push(segment);
+      }
+    }
   }
 
   execute(source: unknown): TransformResult {
@@ -249,6 +288,7 @@ class TransformEngine {
     const formatted = formatOutput(output as Record<string, TransformValue>, {
       transform: this.transform,
       onWarning: (w) => this.warnings.push(w),
+      onError: (e) => this.errors.push(e),
     });
 
     return {
@@ -396,6 +436,7 @@ class TransformEngine {
     const formatted = formatOutput(output as Record<string, TransformValue>, {
       transform: this.transform,
       onWarning: (w) => this.warnings.push(w),
+      onError: (e) => this.errors.push(e),
     });
 
     return {
@@ -552,7 +593,21 @@ class TransformEngine {
       const firstFrom = fromDirective?.value;
       const results: unknown[] = [];
 
-      this.iterateLoops(loopDirectives, 0, context, segment, firstFrom, counterName, results);
+      // A non-array loop source raises a coded error honoring onError.
+      try {
+        this.iterateLoops(loopDirectives, 0, context, segment, firstFrom, counterName, results);
+      } catch (err) {
+        if (err instanceof CodedTransformError) {
+          const onError = this.transform.target.onError ?? 'fail';
+          if (onError === 'fail') {
+            this.errors.push(err.transformError);
+          } else if (onError === 'warn') {
+            this.warnings.push(err.transformError as TransformWarning);
+          }
+          return;
+        }
+        throw err;
+      }
 
       if (!isSink) {
         setNestedValue(output, segment.path, results);
@@ -641,8 +696,17 @@ class TransformEngine {
         return '';
       }
       // Verb and resolution failures honor the target onError policy.
-      const message = err instanceof Error ? err.message : String(err);
       const onError = this.transform.target.onError ?? 'fail';
+      if (err instanceof CodedTransformError) {
+        const coded = { ...err.transformError, segment: segmentPath };
+        if (onError === 'fail') {
+          this.errors.push(coded);
+        } else if (onError === 'warn') {
+          this.warnings.push(coded as TransformWarning);
+        }
+        return '';
+      }
+      const message = err instanceof Error ? err.message : String(err);
       if (onError === 'fail') {
         this.errors.push(transformError(message, segmentPath));
       } else if (onError === 'warn') {
@@ -700,7 +764,14 @@ class TransformEngine {
       }
     }
 
-    if (!Array.isArray(items)) return;
+    if (!Array.isArray(items)) {
+      // A present non-array scalar is a T009 error; an absent (undefined/null)
+      // source yields zero rows silently.
+      if (items !== undefined && items !== null) {
+        throw new CodedTransformError(loopSourceNotArrayError(loopPath, segment.path));
+      }
+      return;
+    }
 
     // Type preservation: track the ODIN doc path of the current item when resolvable.
     const trackOdin =
@@ -822,8 +893,29 @@ class TransformEngine {
         }
       }
 
+      // Missing source path: a required field always fails (T005); an ordinary
+      // field honors the onMissing policy (fail -> T005, warn -> warning,
+      // skip/default -> keep null). A path that is merely null is not "missing".
       const requiredModifier = mapping.modifiers.find((m) => m.name === 'required');
-      if (requiredModifier && value.type === 'null') {
+      if (value.type === 'null' && this.isCopySourceAbsent(mapping, context)) {
+        const rawPath = (mapping.value as { path?: string }).path ?? mapping.target;
+        const path = rawPath.startsWith('.') ? rawPath.slice(1) : rawPath;
+        if (requiredModifier) {
+          this.errors.push(sourcePathNotFoundError(path, mapping.target));
+          return;
+        }
+        const policy = context.onMissing;
+        if (policy === 'fail') {
+          this.errors.push(sourcePathNotFoundError(path, mapping.target));
+          return;
+        }
+        if (policy === 'warn') {
+          this.warnings.push({
+            ...sourcePathNotFoundError(path, mapping.target),
+          } as TransformWarning);
+        }
+      } else if (requiredModifier && value.type === 'null') {
+        // Required field present but explicitly null.
         this.errors.push(sourceMissingError(mapping.target));
         return;
       }
@@ -883,8 +975,20 @@ class TransformEngine {
         throw err;
       }
 
-      const message = err instanceof Error ? err.message : String(err);
       const onError = this.transform.target.onError ?? 'fail';
+
+      // Coded errors carry a stable T-code; preserve it under fail/warn.
+      if (err instanceof CodedTransformError) {
+        const coded = { ...err.transformError, field: mapping.target };
+        if (onError === 'fail') {
+          this.errors.push(coded);
+        } else if (onError === 'warn') {
+          this.warnings.push(coded as TransformWarning);
+        }
+        return;
+      }
+
+      const message = err instanceof Error ? err.message : String(err);
       if (onError === 'fail') {
         this.errors.push(transformError(message, mapping.target));
       } else if (onError === 'warn') {
@@ -1066,8 +1170,7 @@ class TransformEngine {
             return customArgs[0] ?? { type: 'null' };
           }
           // T001: Unknown built-in verb
-          const err = unknownVerbError(expr.verb);
-          throw new Error(err.message);
+          throw new CodedTransformError(unknownVerbError(expr.verb));
         }
 
         // Validate arity at execution time (defense in depth)
@@ -1102,6 +1205,37 @@ class TransformEngine {
         return { type: 'string', value: JSON.stringify(obj) };
       }
     }
+  }
+
+  // Whether a mapping copies a source path that is absent (undefined) — distinct
+  // from a path present with a null value. Only plain copy expressions qualify;
+  // verbs, literals, objects, and special paths are never "missing source".
+  private isCopySourceAbsent(mapping: FieldMapping, context: TransformContext): boolean {
+    const expr = mapping.value;
+    if (expr.type !== 'copy') return false;
+    // A :default modifier supplies its own fallback; not a missing-source error.
+    if (mapping.modifiers.some((m) => m.name === 'default' || m.name === 'object')) return false;
+    const path = expr.path;
+    if (path === '' || path.startsWith('$') || path === '_index') return false;
+    if (context.counters.has(path)) return false;
+
+    let targetObj: unknown;
+    let targetPath: string;
+    if (path.startsWith('.')) {
+      targetObj = context.current !== undefined ? context.current : context.source;
+      targetPath = path.slice(1);
+    } else {
+      const firstPart = path.split('.')[0]!;
+      if (context.aliases.has(firstPart)) {
+        targetObj = context.aliases.get(firstPart);
+        targetPath = path.includes('.') ? path.slice(firstPart.length + 1) : '';
+      } else {
+        targetObj = context.source;
+        targetPath = path;
+      }
+    }
+    const value = targetPath ? resolvePath(targetPath, targetObj) : targetObj;
+    return value === undefined;
   }
 
   private resolvePathValue(path: string, context: TransformContext): TransformValue {

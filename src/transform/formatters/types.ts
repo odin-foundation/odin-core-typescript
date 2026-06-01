@@ -2,7 +2,7 @@
  * ODIN Formatter Types - Shared types for output formatters.
  */
 
-import type { OdinTransform, TransformWarning } from '../../types/transform.js';
+import type { OdinTransform, TransformError, TransformWarning } from '../../types/transform.js';
 
 /**
  * Options passed to formatter functions.
@@ -10,6 +10,8 @@ import type { OdinTransform, TransformWarning } from '../../types/transform.js';
 export interface FormatterOptions {
   transform: OdinTransform;
   onWarning: (warning: TransformWarning) => void;
+  /** Reports an unrecognized target format (T006). When absent, an error is thrown. */
+  onError?: (error: TransformError) => void;
 }
 
 /**

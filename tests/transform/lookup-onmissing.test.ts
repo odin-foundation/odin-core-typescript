@@ -51,10 +51,16 @@ describe('lookup miss honoring onMissing policy', () => {
     expect(r.warnings).toHaveLength(0);
   });
 
-  it('raises T004 when the lookup table is absent and onMissing is fail', () => {
+  it('raises T003 when the lookup table is absent and onMissing is fail', () => {
     const r = run(hdr('fail') + 'name = %lookup NOPE.name @.code', { code: 'A' });
     expect(r.success).toBe(false);
-    expect(r.errors.some((e) => e.code === 'T004')).toBe(true);
+    expect(r.errors.some((e) => e.code === 'T003')).toBe(true);
+  });
+
+  it('stays silent when the lookup table is absent and onMissing is unset', () => {
+    const r = run(hdr() + 'name = %lookup NOPE.name @.code', { code: 'A' });
+    expect(r.success).toBe(true);
+    expect(r.errors).toHaveLength(0);
   });
 
   it('raises T004 when the return column is absent and onMissing is fail', () => {

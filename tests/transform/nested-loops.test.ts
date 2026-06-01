@@ -201,7 +201,7 @@ sku = "@.sku"
   });
 
   describe('error / non-array sources', () => {
-    it('skips an outer item whose inner loop path is not an array (no rows, no error)', () => {
+    it('raises T009 when an inner loop path is a present non-array scalar', () => {
       const result = run(
         `{rows[]}
 :loop vehicles :as veh
@@ -212,13 +212,11 @@ code = "@cov.code"
         { vehicles: [{ vin: 'V1', coverages: 'not-an-array' }] }
       );
 
-      expect(result.success).toBe(true);
-      expect(result.errors).toHaveLength(0);
-      const rows = extractValues(result.output).rows as unknown[];
-      expect(rows).toEqual([]);
+      expect(result.success).toBe(false);
+      expect(result.errors[0]?.code).toBe('T009');
     });
 
-    it('produces an empty result when the outer loop source is not an array', () => {
+    it('raises T009 when the outer loop source is a present non-array scalar', () => {
       const result = run(
         `{rows[]}
 :loop vehicles :as veh
@@ -229,7 +227,21 @@ code = "@cov.code"
         { vehicles: 'nope' }
       );
 
+      expect(result.success).toBe(false);
+      expect(result.errors[0]?.code).toBe('T009');
+    });
+
+    it('yields zero rows with no error when the loop source is absent', () => {
+      const result = run(
+        `{rows[]}
+:loop missing :as m
+vin = "@m.vin"
+`,
+        { other: [] }
+      );
+
       expect(result.success).toBe(true);
+      expect(result.errors).toHaveLength(0);
       const rows = extractValues(result.output).rows as unknown[];
       expect(rows).toEqual([]);
     });

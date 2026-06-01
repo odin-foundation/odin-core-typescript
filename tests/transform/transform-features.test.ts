@@ -799,7 +799,7 @@ field = "@._line"
       expect(result.warnings[0]?.code).toBe('UNKNOWN_RECORD_TYPE');
     });
 
-    it('SOURCE_MISSING: reports required field missing', () => {
+    it('T005: reports required field with absent source path', () => {
       const transformDoc = `
 {$}
 odin = "1.0.0"
@@ -813,7 +813,7 @@ value = "@.missing :required"
       const result = executeTransform(transform, {});
 
       expect(result.success).toBe(false);
-      expect(result.errors[0]?.code).toBe('SOURCE_MISSING');
+      expect(result.errors[0]?.code).toBe('T005');
     });
   });
 

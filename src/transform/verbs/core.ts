@@ -7,7 +7,12 @@
 
 import type { VerbFunction, TransformContext } from '../../types/transform.js';
 import { toString, toBoolean, isNull, isEmpty, str, nil } from './helpers.js';
-import { lookupKeyNotFoundError, lookupKeyNotFoundWarning } from '../errors.js';
+import {
+  lookupKeyNotFoundError,
+  lookupKeyNotFoundWarning,
+  lookupTableNotFoundError,
+} from '../errors.js';
+import type { TransformError, TransformWarning } from '../../types/transform.js';
 
 /**
  * Report a lookup miss honoring the onMissing policy.
@@ -19,6 +24,20 @@ function reportLookupMiss(context: TransformContext, tableName: string, key: str
     (context.errors ??= []).push(lookupKeyNotFoundError(tableName, key));
   } else if (policy === 'warn') {
     (context.warnings ??= []).push(lookupKeyNotFoundWarning(tableName, key));
+  }
+}
+
+/**
+ * Report a missing lookup table (T003) honoring the onMissing policy.
+ * Distinct from a missing key (T004): the referenced table was never declared.
+ */
+function reportTableNotFound(context: TransformContext, tableName: string): void {
+  const policy = context.onMissing;
+  const issue = lookupTableNotFoundError(tableName);
+  if (policy === 'fail') {
+    (context.errors ??= []).push(issue as TransformError);
+  } else if (policy === 'warn') {
+    (context.warnings ??= []).push(issue as TransformWarning);
   }
 }
 
@@ -145,7 +164,7 @@ export const lookup: VerbFunction = (args, context) => {
 
   const table = context.tables.get(tableName);
   if (!table) {
-    reportLookupMiss(context, tableName, matchKey);
+    reportTableNotFound(context, tableName);
     return nil();
   }
 

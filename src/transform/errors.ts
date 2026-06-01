@@ -101,6 +101,18 @@ export class TypeValidationError extends Error {
   }
 }
 
+/**
+ * Error carrying a stable transform error code thrown during expression
+ * evaluation. The engine's mapping handler reads `.transformError` to preserve
+ * the code instead of collapsing it to TRANSFORM_ERROR.
+ */
+export class CodedTransformError extends Error {
+  constructor(public readonly transformError: TransformError) {
+    super(transformError.message);
+    this.name = 'CodedTransformError';
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Error Factory Functions
 // ─────────────────────────────────────────────────────────────────────────────
