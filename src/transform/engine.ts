@@ -15,6 +15,7 @@ import type {
   TransformSegment,
   SegmentDirective,
   FieldMapping,
+  Modifier,
   ValueExpression,
   VerbRegistry,
 } from '../types/transform.js';
@@ -79,6 +80,162 @@ import type { TransformOptions, MultiRecordInput } from './engine-types.js';
 // ─────────────────────────────────────────────────────────────────────────────
 // Transform Engine
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Arity metadata depends only on the verb name; cache it across calls.
+const verbArityCache = new Map<string, { arity: number; minArity: number }>();
+function resolveVerbArity(verb: string): { arity: number; minArity: number } {
+  let entry = verbArityCache.get(verb);
+  if (entry === undefined) {
+    entry = { arity: getVerbArity(verb), minArity: getVerbMinArity(verb) };
+    verbArityCache.set(verb, entry);
+  }
+  return entry;
+}
+
+// Precompiled validation data for a :validate / :enum / :range modifier.
+interface CompiledValidation {
+  regex?: RegExp | null; // null = invalid pattern
+  pattern?: string;
+  enumSet?: Set<string>;
+  enumLabel?: string;
+  rangeStr?: string;
+  rangeMin?: number;
+  rangeMax?: number;
+}
+
+// Per-mapping directive references and boolean flags, derived once from the
+// mapping's modifiers (which are data-independent and shared across executions).
+interface MappingMods {
+  ifMod: Modifier | undefined;
+  unlessMod: Modifier | undefined;
+  objectMod: Modifier | undefined;
+  nsMod: Modifier | undefined;
+  validateMod: Modifier | undefined;
+  enumMod: Modifier | undefined;
+  rangeMod: Modifier | undefined;
+  hasDefault: boolean;
+  hasRequired: boolean;
+  hasOmitNull: boolean;
+  hasOmitEmpty: boolean;
+  hasRaw: boolean;
+  hasArray: boolean;
+  hasDeprecated: boolean;
+  hasAttr: boolean;
+  hasCdata: boolean;
+  hasDefaultOrObject: boolean;
+  validation: CompiledValidation;
+  validationActive: boolean;
+}
+
+// Hidden memo slot on the shared FieldMapping AST node.
+type MappingWithMods = FieldMapping & { __mods?: MappingMods };
+
+function compileValidation(
+  validateMod?: Modifier,
+  enumMod?: Modifier,
+  rangeMod?: Modifier
+): CompiledValidation {
+  const v: CompiledValidation = {};
+  if (validateMod && validateMod.value !== undefined) {
+    const pattern = String(validateMod.value);
+    v.pattern = pattern;
+    try {
+      v.regex = new RegExp(pattern);
+    } catch {
+      v.regex = null;
+    }
+  }
+  if (enumMod && enumMod.value !== undefined) {
+    const allowed = String(enumMod.value)
+      .split(',')
+      .map((s) => s.trim().replace(/^["']|["']$/g, ''));
+    v.enumSet = new Set(allowed);
+    v.enumLabel = allowed.join(', ');
+  }
+  if (rangeMod && rangeMod.value !== undefined) {
+    const rangeStr = String(rangeMod.value);
+    const parts = rangeStr.split('..');
+    v.rangeStr = rangeStr;
+    v.rangeMin = parseFloat(parts[0] ?? '');
+    v.rangeMax = parseFloat(parts[1] ?? '');
+  }
+  return v;
+}
+
+function getMappingMods(mapping: FieldMapping): MappingMods {
+  const cached = (mapping as MappingWithMods).__mods;
+  if (cached !== undefined) return cached;
+
+  const mods = mapping.modifiers;
+  let ifMod: Modifier | undefined;
+  let unlessMod: Modifier | undefined;
+  let objectMod: Modifier | undefined;
+  let nsMod: Modifier | undefined;
+  let validateMod: Modifier | undefined;
+  let enumMod: Modifier | undefined;
+  let rangeMod: Modifier | undefined;
+  let hasDefault = false;
+  let hasRequired = false;
+  let hasOmitNull = false;
+  let hasOmitEmpty = false;
+  let hasRaw = false;
+  let hasArray = false;
+  let hasDeprecated = false;
+  let hasAttr = false;
+  let hasCdata = false;
+
+  for (const m of mods) {
+    switch (m.name) {
+      case 'if': if (!ifMod) ifMod = m; break;
+      case 'unless': if (!unlessMod) unlessMod = m; break;
+      case 'object': if (!objectMod) objectMod = m; break;
+      case 'ns': if (!nsMod) nsMod = m; break;
+      case 'validate': if (!validateMod) validateMod = m; break;
+      case 'enum': if (!enumMod) enumMod = m; break;
+      case 'range': if (!rangeMod) rangeMod = m; break;
+      case 'default': hasDefault = true; break;
+      case 'required': hasRequired = true; break;
+      case 'omitNull': hasOmitNull = true; break;
+      case 'omitEmpty': hasOmitEmpty = true; break;
+      case 'raw': hasRaw = true; break;
+      case 'array': hasArray = true; break;
+      case 'deprecated': hasDeprecated = true; break;
+      case 'attr': hasAttr = true; break;
+      case 'cdata': hasCdata = true; break;
+    }
+  }
+
+  const validation = compileValidation(validateMod, enumMod, rangeMod);
+  const entry: MappingMods = {
+    ifMod,
+    unlessMod,
+    objectMod,
+    nsMod,
+    validateMod,
+    enumMod,
+    rangeMod,
+    hasDefault,
+    hasRequired,
+    hasOmitNull,
+    hasOmitEmpty,
+    hasRaw,
+    hasArray,
+    hasDeprecated,
+    hasAttr,
+    hasCdata,
+    hasDefaultOrObject: hasDefault || objectMod !== undefined,
+    validation,
+    validationActive:
+      validateMod !== undefined || enumMod !== undefined || rangeMod !== undefined,
+  };
+  Object.defineProperty(mapping, '__mods', {
+    value: entry,
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
+  return entry;
+}
 
 /**
  * Execute a transform on source data
@@ -852,21 +1009,22 @@ class TransformEngine {
     output: Record<string, unknown>,
     _pathPrefix: string = ''
   ): void {
+    const mods = getMappingMods(mapping);
     try {
-      const ifModifier = mapping.modifiers.find((m) => m.name === 'if');
+      const ifModifier = mods.ifMod;
       if (ifModifier) {
         if (!this.evaluateFieldCondition(String(ifModifier.value), context)) return;
       }
 
-      const unlessModifier = mapping.modifiers.find((m) => m.name === 'unless');
+      const unlessModifier = mods.unlessMod;
       if (unlessModifier) {
         if (this.evaluateFieldCondition(String(unlessModifier.value), context)) return;
       }
 
-      const objectModifier = mapping.modifiers.find((m) => m.name === 'object');
+      const objectModifier = mods.objectMod;
 
       // A :default modifier handles a missing lookup; suppress errors raised during evaluation.
-      const hasDefaultModifier = mapping.modifiers.some((m) => m.name === 'default');
+      const hasDefaultModifier = mods.hasDefault;
       const errorsBefore = hasDefaultModifier ? (context.errors?.length ?? 0) : 0;
 
       let value = objectModifier
@@ -883,7 +1041,7 @@ class TransformEngine {
       }
 
       // Validation modifiers: :validate, :enum, :range (honors onValidation policy)
-      if (!this.validateFieldValue(value, mapping)) return;
+      if (mods.validationActive && !this.validateFieldValue(value, mapping, mods)) return;
 
       // Check for format-incompatible modifiers and warn
       const targetFormat = this.transform.target.format;
@@ -896,8 +1054,8 @@ class TransformEngine {
       // Missing source path: a required field always fails (T005); an ordinary
       // field honors the onMissing policy (fail -> T005, warn -> warning,
       // skip/default -> keep null). A path that is merely null is not "missing".
-      const requiredModifier = mapping.modifiers.find((m) => m.name === 'required');
-      if (value.type === 'null' && this.isCopySourceAbsent(mapping, context)) {
+      const requiredModifier = mods.hasRequired;
+      if (value.type === 'null' && this.isCopySourceAbsent(mapping, context, mods)) {
         const rawPath = (mapping.value as { path?: string }).path ?? mapping.target;
         const path = rawPath.startsWith('.') ? rawPath.slice(1) : rawPath;
         if (requiredModifier) {
@@ -920,11 +1078,9 @@ class TransformEngine {
         return;
       }
 
-      const omitNullModifier = mapping.modifiers.find((m) => m.name === 'omitNull');
-      if (omitNullModifier && value.type === 'null') return;
+      if (mods.hasOmitNull && value.type === 'null') return;
 
-      const omitEmptyModifier = mapping.modifiers.find((m) => m.name === 'omitEmpty');
-      if (omitEmptyModifier && value.type === 'string' && value.value === '') return;
+      if (mods.hasOmitEmpty && value.type === 'string' && value.value === '') return;
 
       value = applyConfidentialEnforcement(
         value,
@@ -934,12 +1090,12 @@ class TransformEngine {
 
       // Embed value modifiers in TransformValue
       if (!this.transform.enforceConfidential) {
-        const hasRequired = mapping.modifiers.some((m) => m.name === 'required');
+        const hasRequired = mods.hasRequired;
         const hasConfidential = mapping.confidential === true;
-        const hasDeprecated = mapping.modifiers.some((m) => m.name === 'deprecated');
-        const hasAttr = mapping.modifiers.some((m) => m.name === 'attr');
-        const hasCdata = mapping.modifiers.some((m) => m.name === 'cdata');
-        const nsMod = mapping.modifiers.find((m) => m.name === 'ns');
+        const hasDeprecated = mods.hasDeprecated;
+        const hasAttr = mods.hasAttr;
+        const hasCdata = mods.hasCdata;
+        const nsMod = mods.nsMod;
 
         if (hasRequired || hasConfidential || hasDeprecated || hasAttr || hasCdata || nsMod?.value) {
           value = {
@@ -957,12 +1113,12 @@ class TransformEngine {
       }
 
       // :raw emits inline JSON structurally instead of an escaped string.
-      if (mapping.modifiers.some((m) => m.name === 'raw')) {
+      if (mods.hasRaw) {
         value = this.parseRawJsonValue(value);
       }
 
       // :array wraps the value in a single-element array.
-      if (mapping.modifiers.some((m) => m.name === 'array')) {
+      if (mods.hasArray) {
         value = { type: 'array', items: [value] };
       }
 
@@ -1000,44 +1156,38 @@ class TransformEngine {
 
   // Validate a value against :validate / :enum / :range modifiers.
   // Returns false when the field should be dropped (onValidation = skip).
-  private validateFieldValue(value: TransformValue, mapping: FieldMapping): boolean {
+  private validateFieldValue(
+    value: TransformValue,
+    mapping: FieldMapping,
+    mods: MappingMods = getMappingMods(mapping)
+  ): boolean {
     if (value.type === 'null') return true;
 
     const policy = this.transform.target.onValidation ?? 'fail';
     const failures: string[] = [];
+    const v = mods.validation;
 
-    const validateMod = mapping.modifiers.find((m) => m.name === 'validate');
-    if (validateMod && validateMod.value !== undefined) {
-      const pattern = String(validateMod.value);
+    if (mods.validateMod && mods.validateMod.value !== undefined) {
+      const pattern = v.pattern!;
       const str = transformValueToString(value);
-      let matched = false;
-      try {
-        matched = new RegExp(pattern).test(str);
-      } catch {
+      if (v.regex === null) {
         failures.push(`invalid validation pattern '${pattern}'`);
-      }
-      if (!matched && failures.length === 0) {
+      } else if (!v.regex!.test(str)) {
         failures.push(`value '${str}' does not match pattern '${pattern}'`);
       }
     }
 
-    const enumMod = mapping.modifiers.find((m) => m.name === 'enum');
-    if (enumMod && enumMod.value !== undefined) {
-      const allowed = String(enumMod.value)
-        .split(',')
-        .map((v) => v.trim().replace(/^["']|["']$/g, ''));
+    if (mods.enumMod && mods.enumMod.value !== undefined) {
       const str = transformValueToString(value);
-      if (!allowed.includes(str)) {
-        failures.push(`value '${str}' is not one of [${allowed.join(', ')}]`);
+      if (!v.enumSet!.has(str)) {
+        failures.push(`value '${str}' is not one of [${v.enumLabel}]`);
       }
     }
 
-    const rangeMod = mapping.modifiers.find((m) => m.name === 'range');
-    if (rangeMod && rangeMod.value !== undefined) {
-      const rangeStr = String(rangeMod.value);
-      const parts = rangeStr.split('..');
-      const min = parseFloat(parts[0] ?? '');
-      const max = parseFloat(parts[1] ?? '');
+    if (mods.rangeMod && mods.rangeMod.value !== undefined) {
+      const rangeStr = v.rangeStr!;
+      const min = v.rangeMin!;
+      const max = v.rangeMax!;
       const num = this.numericOf(value);
       if (num === null) {
         failures.push(`value '${transformValueToString(value)}' is not numeric for range ${rangeStr}`);
@@ -1174,8 +1324,7 @@ class TransformEngine {
         }
 
         // Validate arity at execution time (defense in depth)
-        const arity = getVerbArity(expr.verb);
-        const minArity = getVerbMinArity(expr.verb);
+        const { arity, minArity } = resolveVerbArity(expr.verb);
         if (expr.args.length < minArity) {
           const arityDesc = arity < 0 ? `at least ${minArity}` : `${arity}`;
           throw new Error(
@@ -1210,11 +1359,15 @@ class TransformEngine {
   // Whether a mapping copies a source path that is absent (undefined) — distinct
   // from a path present with a null value. Only plain copy expressions qualify;
   // verbs, literals, objects, and special paths are never "missing source".
-  private isCopySourceAbsent(mapping: FieldMapping, context: TransformContext): boolean {
+  private isCopySourceAbsent(
+    mapping: FieldMapping,
+    context: TransformContext,
+    mods: MappingMods = getMappingMods(mapping)
+  ): boolean {
     const expr = mapping.value;
     if (expr.type !== 'copy') return false;
     // A :default modifier supplies its own fallback; not a missing-source error.
-    if (mapping.modifiers.some((m) => m.name === 'default' || m.name === 'object')) return false;
+    if (mods.hasDefaultOrObject) return false;
     const path = expr.path;
     if (path === '' || path.startsWith('$') || path === '_index') return false;
     if (context.counters.has(path)) return false;
