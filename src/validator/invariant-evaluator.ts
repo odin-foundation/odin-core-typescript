@@ -1,7 +1,7 @@
 /**
  * ODIN Validator - Invariant expression evaluation.
  *
- * Recursive-descent evaluator over the invariant grammar:
+ * Recursive-descent parser over the invariant grammar:
  *   expression     = logic_or
  *   logic_or       = logic_and , { "||" , logic_and }
  *   logic_and      = equality , { "&&" , equality }
@@ -11,6 +11,9 @@
  *   multiplicative = unary , { ( "*" | "/" | "%" ) , unary }
  *   unary          = [ "!" ] , primary
  *   primary        = path | number | string | "(" , expression , ")"
+ *
+ * An expression is parsed to an AST once and cached by its source string; each
+ * document validation evaluates the cached AST against that document's values.
  */
 
 import type { OdinValue } from '../types/values.js';
@@ -34,6 +37,22 @@ export interface InvariantResult {
   /** True if any referenced field is present but null. */
   nullOperand: boolean;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AST
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Node =
+  | { kind: 'number'; value: number }
+  | { kind: 'string'; value: string }
+  | { kind: 'bool'; value: boolean }
+  | { kind: 'field'; name: string }
+  | { kind: 'not'; operand: Node }
+  | { kind: 'logic'; op: '&&' | '||'; left: Node; right: Node }
+  | { kind: 'equality'; op: '==' | '!=' | '='; left: Node; right: Node }
+  | { kind: 'compare'; op: '>' | '<' | '>=' | '<='; left: Node; right: Node }
+  | { kind: 'additive'; op: '+' | '-'; left: Node; right: Node }
+  | { kind: 'multiplicative'; op: '*' | '/' | '%'; left: Node; right: Node };
 
 const MULTI_CHAR_OPS = ['==', '!=', '>=', '<=', '&&', '||'];
 const SINGLE_CHAR_OPS = new Set(['+', '-', '*', '/', '%', '>', '<', '=', '!']);
@@ -86,14 +105,14 @@ function tokenize(expr: string): Token[] {
     }
     if (c >= '0' && c <= '9') {
       let j = i;
-      while (j < expr.length && /[0-9.]/.test(expr[j]!)) j++;
+      while (j < expr.length && isNumberChar(expr[j]!)) j++;
       tokens.push({ kind: 'number', text: expr.slice(i, j) });
       i = j;
       continue;
     }
-    if (/[A-Za-z_]/.test(c)) {
+    if (isIdentStart(c)) {
       let j = i;
-      while (j < expr.length && /[A-Za-z0-9_.]/.test(expr[j]!)) j++;
+      while (j < expr.length && isIdentChar(expr[j]!)) j++;
       tokens.push({ kind: 'ident', text: expr.slice(i, j) });
       i = j;
       continue;
@@ -103,18 +122,32 @@ function tokenize(expr: string): Token[] {
   return tokens;
 }
 
+function isNumberChar(c: string): boolean {
+  return (c >= '0' && c <= '9') || c === '.';
+}
+
+function isIdentStart(c: string): boolean {
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c === '_';
+}
+
+function isIdentChar(c: string): boolean {
+  return isIdentStart(c) || (c >= '0' && c <= '9') || c === '.';
+}
+
 /** Reserved identifiers that resolve to boolean literals, not fields. */
 const BOOLEAN_LITERALS: Record<string, boolean> = { true: true, false: false };
 
-/**
- * Parse and evaluate an invariant expression against document field values.
- */
-export function evaluateInvariant(expr: string, resolve: FieldResolver): InvariantResult {
+// ─────────────────────────────────────────────────────────────────────────────
+// Parse (string -> AST), cached per expression source
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Compiled, document-independent invariant ASTs keyed by source string. */
+const astCache = new Map<string, Node>();
+
+/** Parse an invariant expression to an AST. Throws on malformed input. */
+function parseToAst(expr: string): Node {
   const tokens = tokenize(expr);
   let pos = 0;
-
-  let absentOperand = false;
-  let nullOperand = false;
 
   function peek(): Token | undefined {
     return tokens[pos];
@@ -123,97 +156,80 @@ export function evaluateInvariant(expr: string, resolve: FieldResolver): Invaria
     return tokens[pos++];
   }
 
-  function parseExpression(): Operand {
+  function parseExpression(): Node {
     return parseLogicOr();
   }
 
-  function parseLogicOr(): Operand {
+  function parseLogicOr(): Node {
     let left = parseLogicAnd();
     while (peek()?.text === '||') {
       next();
       const right = parseLogicAnd();
-      left = toBool(left) || toBool(right);
+      left = { kind: 'logic', op: '||', left, right };
     }
     return left;
   }
 
-  function parseLogicAnd(): Operand {
+  function parseLogicAnd(): Node {
     let left = parseEquality();
     while (peek()?.text === '&&') {
       next();
       const right = parseEquality();
-      left = toBool(left) && toBool(right);
+      left = { kind: 'logic', op: '&&', left, right };
     }
     return left;
   }
 
-  function parseEquality(): Operand {
+  function parseEquality(): Node {
     let left = parseComparison();
     while (peek()?.text === '==' || peek()?.text === '!=' || peek()?.text === '=') {
-      const op = next()!.text;
+      const op = next()!.text as '==' | '!=' | '=';
       const right = parseComparison();
-      const eq = looseEquals(left, right);
-      left = op === '!=' ? !eq : eq;
+      left = { kind: 'equality', op, left, right };
     }
     return left;
   }
 
-  function parseComparison(): Operand {
+  function parseComparison(): Node {
     let left = parseAdditive();
     while (['>', '<', '>=', '<='].includes(peek()?.text ?? '')) {
-      const op = next()!.text;
+      const op = next()!.text as '>' | '<' | '>=' | '<=';
       const right = parseAdditive();
-      left = compare(left, op, right);
+      left = { kind: 'compare', op, left, right };
     }
     return left;
   }
 
-  function parseAdditive(): Operand {
+  function parseAdditive(): Node {
     let left = parseMultiplicative();
     while (peek()?.text === '+' || peek()?.text === '-') {
-      const op = next()!.text;
+      const op = next()!.text as '+' | '-';
       const right = parseMultiplicative();
-      const ln = toNum(left);
-      const rn = toNum(right);
-      if (ln === undefined || rn === undefined) {
-        left = NaN;
-      } else {
-        left = op === '+' ? ln + rn : ln - rn;
-      }
+      left = { kind: 'additive', op, left, right };
     }
     return left;
   }
 
-  function parseMultiplicative(): Operand {
+  function parseMultiplicative(): Node {
     let left = parseUnary();
     while (['*', '/', '%'].includes(peek()?.text ?? '')) {
-      const op = next()!.text;
+      const op = next()!.text as '*' | '/' | '%';
       const right = parseUnary();
-      const ln = toNum(left);
-      const rn = toNum(right);
-      if (ln === undefined || rn === undefined) {
-        left = NaN;
-      } else if (op === '*') {
-        left = ln * rn;
-      } else if (op === '/') {
-        left = rn === 0 ? NaN : ln / rn;
-      } else {
-        left = rn === 0 ? NaN : ln % rn;
-      }
+      left = { kind: 'multiplicative', op, left, right };
     }
     return left;
   }
 
-  function parseUnary(): Operand {
+  function parseUnary(): Node {
     if (peek()?.text === '!') {
       next();
       const operand = parseUnary();
-      return !toBool(operand);
+      return { kind: 'not', operand };
     }
     return parsePrimary();
   }
 
-  function parsePrimary(): Operand {
+  function parsePrimary(): Node {
     const tok = next();
     if (!tok) throw new Error('Unexpected end of invariant expression');
 
@@ -226,42 +242,123 @@ export function evaluateInvariant(expr: string, resolve: FieldResolver): Invaria
     if (tok.kind === 'number') {
       const n = parseFloat(tok.text);
       if (isNaN(n)) throw new Error(`Invalid number '${tok.text}'`);
-      return n;
+      return { kind: 'number', value: n };
     }
     if (tok.kind === 'string') {
-      return tok.text;
+      return { kind: 'string', value: tok.text };
     }
     if (tok.kind === 'ident') {
       if (tok.text in BOOLEAN_LITERALS) {
-        return BOOLEAN_LITERALS[tok.text]!;
+        return { kind: 'bool', value: BOOLEAN_LITERALS[tok.text]! };
       }
-      const value = resolve(tok.text);
-      if (value === undefined) {
-        absentOperand = true;
-        return NaN;
-      }
-      if (value.type === 'null') {
-        nullOperand = true;
-        return null;
-      }
-      return operandFromValue(value);
+      return { kind: 'field', name: tok.text };
     }
     throw new Error(`Unexpected token '${tok.text}'`);
   }
 
-  let result: boolean | undefined;
-  const final = parseExpression();
+  const ast = parseExpression();
   if (peek() !== undefined) throw new Error('Unexpected trailing tokens in invariant expression');
+  return ast;
+}
 
-  if (nullOperand) {
+/** Return the cached AST for an expression, parsing and caching it on first use. */
+function getAst(expr: string): Node {
+  let ast = astCache.get(expr);
+  if (ast === undefined) {
+    ast = parseToAst(expr);
+    astCache.set(expr, ast);
+  }
+  return ast;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Evaluate (AST + resolver -> result), per document
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Per-evaluation state tracking absent/null operands. */
+interface EvalState {
+  resolve: FieldResolver;
+  absentOperand: boolean;
+  nullOperand: boolean;
+}
+
+function evalNode(node: Node, state: EvalState): Operand {
+  switch (node.kind) {
+    case 'number':
+      return node.value;
+    case 'string':
+      return node.value;
+    case 'bool':
+      return node.value;
+    case 'field': {
+      const value = state.resolve(node.name);
+      if (value === undefined) {
+        state.absentOperand = true;
+        return NaN;
+      }
+      if (value.type === 'null') {
+        state.nullOperand = true;
+        return null;
+      }
+      return operandFromValue(value);
+    }
+    case 'not':
+      return !toBool(evalNode(node.operand, state));
+    case 'logic': {
+      const left = evalNode(node.left, state);
+      const right = evalNode(node.right, state);
+      return node.op === '||' ? toBool(left) || toBool(right) : toBool(left) && toBool(right);
+    }
+    case 'equality': {
+      const left = evalNode(node.left, state);
+      const right = evalNode(node.right, state);
+      const eq = looseEquals(left, right);
+      return node.op === '!=' ? !eq : eq;
+    }
+    case 'compare': {
+      const left = evalNode(node.left, state);
+      const right = evalNode(node.right, state);
+      return compare(left, node.op, right);
+    }
+    case 'additive': {
+      const ln = toNum(evalNode(node.left, state));
+      const rn = toNum(evalNode(node.right, state));
+      if (ln === undefined || rn === undefined) return NaN;
+      return node.op === '+' ? ln + rn : ln - rn;
+    }
+    case 'multiplicative': {
+      const ln = toNum(evalNode(node.left, state));
+      const rn = toNum(evalNode(node.right, state));
+      if (ln === undefined || rn === undefined) return NaN;
+      if (node.op === '*') return ln * rn;
+      if (node.op === '/') return rn === 0 ? NaN : ln / rn;
+      return rn === 0 ? NaN : ln % rn;
+    }
+  }
+}
+
+/**
+ * Parse and evaluate an invariant expression against document field values.
+ *
+ * The parsed AST is cached by expression source, so re-validating documents
+ * against the same schema reuses the compiled form.
+ */
+export function evaluateInvariant(expr: string, resolve: FieldResolver): InvariantResult {
+  const ast = getAst(expr);
+
+  const state: EvalState = { resolve, absentOperand: false, nullOperand: false };
+  const final = evalNode(ast, state);
+
+  let result: boolean | undefined;
+  if (state.nullOperand) {
     result = false;
-  } else if (absentOperand) {
+  } else if (state.absentOperand) {
     result = undefined;
   } else {
     result = toBool(final);
   }
 
-  return { value: result, nullOperand };
+  return { value: result, nullOperand: state.nullOperand };
 }
 
 /** Extract a comparable operand from an OdinValue. */

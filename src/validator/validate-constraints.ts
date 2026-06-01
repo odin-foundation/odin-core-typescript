@@ -186,6 +186,37 @@ export function validateBounds(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Compiled pattern cache keyed by pattern source.
+ *
+ * `safe` carries a precompiled RegExp; `unsafe` marks a pattern rejected by the
+ * ReDoS analysis; `invalid` marks a pattern that fails to compile. The static
+ * safety/compilation work runs once per distinct pattern, reused for every value.
+ */
+type CompiledPattern =
+  | { kind: 'safe'; regex: RegExp }
+  | { kind: 'unsafe' }
+  | { kind: 'invalid' };
+
+const patternCache = new Map<string, CompiledPattern>();
+
+function getCompiledPattern(pattern: string): CompiledPattern {
+  let compiled = patternCache.get(pattern);
+  if (compiled === undefined) {
+    if (isUnsafeRegexPattern(pattern)) {
+      compiled = { kind: 'unsafe' };
+    } else {
+      try {
+        compiled = { kind: 'safe', regex: new RegExp(pattern) };
+      } catch {
+        compiled = { kind: 'invalid' };
+      }
+    }
+    patternCache.set(pattern, compiled);
+  }
+  return compiled;
+}
+
+/**
  * Validate pattern constraint.
  * Includes ReDoS protection for user-provided schema patterns.
  */
@@ -196,8 +227,10 @@ export function validatePattern(
   constraint: { kind: 'pattern'; pattern: string }
 ): void {
   if (value.type === 'string') {
+    const compiled = getCompiledPattern(constraint.pattern);
+
     // ReDoS protection: reject dangerous patterns at the pattern level
-    if (isUnsafeRegexPattern(constraint.pattern)) {
+    if (compiled.kind === 'unsafe') {
       addError(
         ctx,
         path,
@@ -209,36 +242,35 @@ export function validatePattern(
       return;
     }
 
-    try {
-      const regex = new RegExp(constraint.pattern);
-
-      // Use safe regex test with timing protection
-      const result = safeRegexTest(regex, value.value);
-
-      if (result.timedOut) {
-        addError(
-          ctx,
-          path,
-          'V016',
-          `Pattern validation timed out or string too long`,
-          `execution < ${MAX_REGEX_EXECUTION_MS}ms`,
-          `${result.executionTimeMs.toFixed(1)}ms`
-        );
-        return;
-      }
-
-      if (!result.matched) {
-        addError(
-          ctx,
-          path,
-          'V004',
-          `Value does not match pattern`,
-          constraint.pattern,
-          value.value
-        );
-      }
-    } catch {
+    if (compiled.kind === 'invalid') {
       addError(ctx, path, 'V015', `Invalid regex pattern`, 'valid regex', constraint.pattern);
+      return;
+    }
+
+    // Use safe regex test with timing protection
+    const result = safeRegexTest(compiled.regex, value.value);
+
+    if (result.timedOut) {
+      addError(
+        ctx,
+        path,
+        'V016',
+        `Pattern validation timed out or string too long`,
+        `execution < ${MAX_REGEX_EXECUTION_MS}ms`,
+        `${result.executionTimeMs.toFixed(1)}ms`
+      );
+      return;
+    }
+
+    if (!result.matched) {
+      addError(
+        ctx,
+        path,
+        'V004',
+        `Value does not match pattern`,
+        constraint.pattern,
+        value.value
+      );
     }
   }
 }
