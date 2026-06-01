@@ -1181,12 +1181,23 @@ export class Parser {
     if (token.type === TokenType.TIMESTAMP) {
       this.advance();
       const val = this.getTokenVal(token);
+      // Validate date and time components semantically
+      const tsError = this.validateTimestampString(val, token);
+      if (tsError) {
+        throw tsError;
+      }
       return { type: 'timestamp', value: new Date(val), raw: val };
     }
 
     if (token.type === TokenType.TIME) {
       this.advance();
-      return { type: 'time', value: this.getTokenVal(token) };
+      const val = this.getTokenVal(token);
+      // Validate time components semantically
+      const timeError = this.validateTimeString(val, token);
+      if (timeError) {
+        throw timeError;
+      }
+      return { type: 'time', value: val };
     }
 
     if (token.type === TokenType.DURATION) {
@@ -1938,6 +1949,94 @@ export class Parser {
         0,
         { value: dateStr }
       );
+    }
+
+    return null;
+  }
+
+  /**
+   * Validate a timestamp string semantically (date portion + time portion + offset).
+   */
+  private validateTimestampString(tsStr: string, token: Token): ParseError | null {
+    const match = tsStr.match(
+      /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/
+    );
+    if (!match) {
+      return new ParseError(`Invalid timestamp format: ${tsStr}`, 'P001', token.line, 0, {
+        value: tsStr,
+      });
+    }
+
+    const dateError = this.validateDateString(match[1]!, token);
+    if (dateError) {
+      return new ParseError(dateError.message, 'P001', token.line, 0, { value: tsStr });
+    }
+
+    const timeError = this.validateTimeComponents(
+      match[2]!,
+      match[3]!,
+      match[4],
+      tsStr,
+      token
+    );
+    if (timeError) return timeError;
+
+    const offset = match[5];
+    if (offset && offset !== 'Z') {
+      const offHour = parseInt(offset.slice(1, 3), 10);
+      const offMin = parseInt(offset.slice(4, 6), 10);
+      if (offHour > 23 || offMin > 59) {
+        return new ParseError(`Invalid timezone offset: ${offset}`, 'P001', token.line, 0, {
+          value: tsStr,
+        });
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Validate a time string semantically (THH:MM[:SS[.sss]]).
+   */
+  private validateTimeString(timeStr: string, token: Token): ParseError | null {
+    const match = timeStr.match(/^T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/);
+    if (!match) {
+      return new ParseError(`Invalid time format: ${timeStr}`, 'P001', token.line, 0, {
+        value: timeStr,
+      });
+    }
+    return this.validateTimeComponents(match[1]!, match[2]!, match[3], timeStr, token);
+  }
+
+  /**
+   * Validate hour/minute/second component bounds. Seconds may be 60 (leap second).
+   */
+  private validateTimeComponents(
+    hourStr: string,
+    minStr: string,
+    secStr: string | undefined,
+    rawStr: string,
+    token: Token
+  ): ParseError | null {
+    const hour = parseInt(hourStr, 10);
+    const minute = parseInt(minStr, 10);
+    const second = secStr !== undefined ? parseInt(secStr, 10) : 0;
+
+    // Hour 24 is only valid as end-of-day midnight (24:00:00)
+    if (hour === 24) {
+      if (minute !== 0 || second !== 0) {
+        return new ParseError(`Invalid hour: ${hour}`, 'P001', token.line, 0, { value: rawStr });
+      }
+    } else if (hour > 23) {
+      return new ParseError(`Invalid hour: ${hour}`, 'P001', token.line, 0, { value: rawStr });
+    }
+    if (minute > 59) {
+      return new ParseError(`Invalid minute: ${minute}`, 'P001', token.line, 0, { value: rawStr });
+    }
+    if (second > 60) {
+      return new ParseError(`Invalid second: ${second}`, 'P001', token.line, 0, {
+        value: rawStr,
+      });
     }
 
     return null;

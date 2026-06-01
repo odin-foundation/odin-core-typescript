@@ -26,7 +26,7 @@
  */
 
 import type { OdinDocument, OdinDocumentBuilder } from './types/document.js';
-import type { OdinValue } from './types/values.js';
+import type { OdinValue, OdinModifiers } from './types/values.js';
 import type { OdinSchema, ValidationResult } from './types/schema.js';
 import type { OdinDiff } from './types/diff.js';
 import type { OdinTransform, TransformResult } from './types/transform.js';
@@ -141,6 +141,35 @@ export class Odin {
           d.conditionals
         )
     );
+  }
+
+  /**
+   * Collapse a chained ODIN document into its computed current state.
+   *
+   * Applies chaining overlay semantics across the chain: later documents
+   * overlay earlier ones, a repeated path replaces the earlier value,
+   * `field = ~` removes the field, and `field[] = ~` clears the array.
+   * Each document's `$` metadata is isolated; the resulting document carries
+   * the final document's metadata.
+   *
+   * @param input - Chained ODIN text, or a pre-parsed list of documents
+   * @param options - Parse options (used when input is text)
+   * @returns Document representing the computed current state
+   *
+   * @example
+   * ```typescript
+   * const current = Odin.collapseChain(
+   *   '{p}\nname = "A"\n\n---\n\n{p}\nname = "B"\nold = ~'
+   * );
+   * current.get('p.name'); // "B"
+   * ```
+   */
+  static collapseChain(
+    input: string | Uint8Array | OdinDocument[],
+    options?: ParseOptions
+  ): OdinDocument {
+    const docs = Array.isArray(input) ? input : Odin.parseDocuments(input, options);
+    return collapseChain(docs);
   }
 
   /**
@@ -697,6 +726,78 @@ export class Odin {
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Compute current-state document from a chain via overlay semantics.
+ */
+function collapseChain(docs: OdinDocument[]): OdinDocument {
+  const assignments = new Map<string, OdinValue>();
+  const modifiers = new Map<string, OdinModifiers>();
+  let metadata = new Map<string, OdinValue>();
+
+  for (const doc of docs) {
+    metadata = new Map<string, OdinValue>(doc.metadata);
+
+    for (const path of doc.paths()) {
+      if (path.startsWith('$.')) continue;
+
+      const value = doc.get(path);
+      if (value === undefined) continue;
+
+      if (value.type === 'null') {
+        if (path.endsWith('[]')) {
+          clearArray(assignments, modifiers, path.slice(0, -2));
+        } else {
+          removePath(assignments, modifiers, path);
+        }
+        continue;
+      }
+
+      assignments.set(path, value);
+      const mods = doc.modifiers.get(path);
+      if (mods) {
+        modifiers.set(path, mods);
+      } else {
+        modifiers.delete(path);
+      }
+    }
+  }
+
+  return new OdinDocumentImpl(metadata, assignments, modifiers);
+}
+
+/**
+ * Remove a path and any nested descendants from the working maps.
+ */
+function removePath(
+  assignments: Map<string, OdinValue>,
+  modifiers: Map<string, OdinModifiers>,
+  path: string
+): void {
+  for (const key of [...assignments.keys()]) {
+    if (key === path || key.startsWith(`${path}.`) || key.startsWith(`${path}[`)) {
+      assignments.delete(key);
+      modifiers.delete(key);
+    }
+  }
+}
+
+/**
+ * Clear all indexed elements of an array path from the working maps.
+ */
+function clearArray(
+  assignments: Map<string, OdinValue>,
+  modifiers: Map<string, OdinModifiers>,
+  arrayPath: string
+): void {
+  const prefix = `${arrayPath}[`;
+  for (const key of [...assignments.keys()]) {
+    if (key.startsWith(prefix)) {
+      assignments.delete(key);
+      modifiers.delete(key);
+    }
+  }
+}
 
 function filterNulls(obj: unknown): unknown {
   if (obj === null || obj === undefined) {

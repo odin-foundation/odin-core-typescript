@@ -37,6 +37,11 @@ interface GoldenTest {
       metadata?: Record<string, string | number | boolean>;
       assignments?: Record<string, ExpectedValue>;
     }>;
+    currentState?: {
+      metadata?: Record<string, string | number | boolean>;
+      assignments?: Record<string, ExpectedValue>;
+      absent?: string[];
+    };
   };
   expectError?: {
     code: string;
@@ -250,6 +255,30 @@ describe('Golden Parse Tests', () => {
                   }
                 }
               });
+            }
+
+            // Check computed current state of a chain
+            if (test.expected.currentState) {
+              const current = Odin.collapseChain(test.input);
+              if (test.expected.currentState.assignments) {
+                for (const [p, ev] of Object.entries(test.expected.currentState.assignments)) {
+                  expect(compareValue(current.get(p), ev)).toBe(true);
+                }
+              }
+              if (test.expected.currentState.metadata) {
+                for (const [key, raw] of Object.entries(test.expected.currentState.metadata)) {
+                  const actual = current.get(`$.${key}`) as
+                    | { value?: unknown; raw?: string }
+                    | undefined;
+                  expect(actual).toBeDefined();
+                  expect(String(actual?.raw ?? actual?.value)).toBe(String(raw));
+                }
+              }
+              if (test.expected.currentState.absent) {
+                for (const p of test.expected.currentState.absent) {
+                  expect(current.get(p)).toBeUndefined();
+                }
+              }
             }
 
             // Check assignments

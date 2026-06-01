@@ -315,6 +315,89 @@ describe('Temporal Parsing', () => {
     });
   });
 
+  describe('Timestamp Component Validation', () => {
+    it('should accept valid timestamp components', () => {
+      const doc = Odin.parse('ts = 2024-06-15T23:59:59Z');
+      expect((doc.get('ts') as any).raw).toBe('2024-06-15T23:59:59Z');
+    });
+
+    it('should reject invalid date portion in timestamp', () => {
+      expect(() => Odin.parse('ts = 2024-13-40T10:30:00Z')).toThrow(ParseError);
+    });
+
+    it('should reject hour > 23 in timestamp', () => {
+      expect(() => Odin.parse('ts = 2024-06-15T25:30:00Z')).toThrow(ParseError);
+    });
+
+    it('should reject minute > 59 in timestamp', () => {
+      expect(() => Odin.parse('ts = 2024-06-15T10:61:00Z')).toThrow(ParseError);
+    });
+
+    it('should reject second > 60 in timestamp', () => {
+      expect(() => Odin.parse('ts = 2024-06-15T10:30:61Z')).toThrow(ParseError);
+    });
+
+    it('should reject out-of-range timezone offset', () => {
+      expect(() => Odin.parse('ts = 2024-06-15T10:30:00+25:00')).toThrow(ParseError);
+    });
+
+    it('should reject fully malformed timestamp', () => {
+      expect(() => Odin.parse('ts = 2024-13-40T99:99:99Z')).toThrow(ParseError);
+    });
+
+    it('should allow leap second in timestamp', () => {
+      const doc = Odin.parse('ts = 2016-12-31T23:59:60Z');
+      expect((doc.get('ts') as any).raw).toBe('2016-12-31T23:59:60Z');
+    });
+
+    it('should raise P001 for malformed timestamp', () => {
+      try {
+        Odin.parse('ts = 2024-06-15T25:00:00Z');
+        throw new Error('expected throw');
+      } catch (e) {
+        expect((e as any).code).toBe('P001');
+      }
+    });
+  });
+
+  describe('Time Component Validation', () => {
+    it('should accept valid time', () => {
+      const doc = Odin.parse('t = T14:30:00');
+      expect((doc.get('t') as any).value).toBe('T14:30:00');
+    });
+
+    it('should accept time without seconds', () => {
+      const doc = Odin.parse('t = T14:30');
+      expect((doc.get('t') as any).value).toBe('T14:30');
+    });
+
+    it('should reject hour > 23 in time', () => {
+      expect(() => Odin.parse('t = T25:00:00')).toThrow(ParseError);
+    });
+
+    it('should reject minute > 59 in time', () => {
+      expect(() => Odin.parse('t = T14:61:00')).toThrow(ParseError);
+    });
+
+    it('should reject second > 60 in time', () => {
+      expect(() => Odin.parse('t = T14:30:61')).toThrow(ParseError);
+    });
+
+    it('should allow leap second in time', () => {
+      const doc = Odin.parse('t = T23:59:60');
+      expect((doc.get('t') as any).value).toBe('T23:59:60');
+    });
+
+    it('should allow hour 24 only as end-of-day midnight', () => {
+      const doc = Odin.parse('t = T24:00:00');
+      expect((doc.get('t') as any).value).toBe('T24:00:00');
+    });
+
+    it('should reject hour 24 with non-zero minutes', () => {
+      expect(() => Odin.parse('t = T24:30:00')).toThrow(ParseError);
+    });
+  });
+
   describe('Temporal Roundtrip', () => {
     it('should roundtrip date', () => {
       const doc = Odin.parse('date = 2024-06-15');
