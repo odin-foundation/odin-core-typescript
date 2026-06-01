@@ -44,6 +44,8 @@ export interface CorpusFixture {
   enforced?: boolean;
   /** Extra {$}-level header fields (raw ODIN values), e.g. { strictTypes: "?true" }. */
   headerFields?: Record<string, string>;
+  /** Output is TS-precision/format/RNG-specific (float last-ULP, JS date form); cross-SDK runners skip it, TS verifies it exactly. */
+  tsOnly?: boolean;
 }
 
 export const CORPUS_DIR = join(HERE, '..', '..', '..', 'golden', 'transform-corpus');
