@@ -182,6 +182,8 @@ class VerbRegistryImpl implements VerbRegistry {
     // Additional financial verbs
     this.builtIn.set('npv', financial.npv);
     this.builtIn.set('irr', financial.irr);
+    this.builtIn.set('xnpv', financial.xnpv);
+    this.builtIn.set('xirr', financial.xirr);
     this.builtIn.set('rate', financial.rate);
     this.builtIn.set('nper', financial.nper);
     this.builtIn.set('depreciation', financial.depreciation);
@@ -288,6 +290,9 @@ class VerbRegistryImpl implements VerbRegistry {
     this.builtIn.set('keyBy', array.keyBy);
     this.builtIn.set('explode', array.explode);
     this.builtIn.set('window', array.window);
+    this.builtIn.set('countIf', array.countIf);
+    this.builtIn.set('sumIf', array.sumIf);
+    this.builtIn.set('avgIf', array.avgIf);
     this.builtIn.set('take', array.take);
     this.builtIn.set('drop', array.drop);
     this.builtIn.set('chunk', array.chunk);
@@ -308,6 +313,8 @@ class VerbRegistryImpl implements VerbRegistry {
     this.builtIn.set('buildUrl', encoding.buildUrl);
     this.builtIn.set('parseQuery', encoding.parseQuery);
     this.builtIn.set('buildQuery', encoding.buildQuery);
+    this.builtIn.set('stableStringify', encoding.stableStringify);
+    this.builtIn.set('canonicalHash', encoding.canonicalHash);
     this.builtIn.set('crc32', encoding.crc32);
 
     // Additional generation verbs
@@ -403,6 +410,9 @@ class VerbRegistryImpl implements VerbRegistry {
     this.builtIn.set('formatDuration', datetime.formatDuration);
     // Numeric
     this.builtIn.set('convertUnit', numeric.convertUnit);
+    this.builtIn.set('gcd', numeric.gcd);
+    this.builtIn.set('lcm', numeric.lcm);
+    this.builtIn.set('factorial', numeric.factorial);
   }
 
   get(name: string): VerbFunction | undefined {

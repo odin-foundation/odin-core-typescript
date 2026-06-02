@@ -8,7 +8,7 @@
  */
 
 import type { VerbFunction, TransformValue, TransformContext } from '../../types/transform.js';
-import { toString, toNumber, int, nil, arr, bool, obj, jsToTransformValue } from './helpers.js';
+import { toString, toNumber, int, nil, arr, bool, obj, jsToTransformValue, numericResult } from './helpers.js';
 import { extractArray, unwrapCdmObjects, getComparableValue } from './array-helpers.js';
 import { SECURITY_LIMITS } from '../../utils/security-limits.js';
 
@@ -1708,4 +1708,97 @@ export const window: VerbFunction = (args) => {
     result.push(arr(resolved.slice(i, i + n)));
   }
   return arr(result);
+};
+
+// Read a named field from an array item, handling CDM-wrapped and raw objects.
+function itemFieldValue(item: unknown, fieldName: string): TransformValue {
+  if (typeof item !== 'object' || item === null) return nil();
+  const itemObj = item as Record<string, unknown>;
+  const raw =
+    itemObj.type === 'object' && typeof itemObj.value === 'object' && itemObj.value !== null
+      ? (itemObj.value as Record<string, unknown>)[fieldName]
+      : itemObj[fieldName];
+  return jsToTransformValue(raw);
+}
+
+// Apply a filter operator to an item value and comparison value.
+function matchesOp(itemVal: TransformValue, operator: string, cmpVal: TransformValue): boolean {
+  switch (operator) {
+    case '=':
+    case '==':
+      return toString(itemVal) === toString(cmpVal);
+    case '!=':
+    case '<>':
+      return toString(itemVal) !== toString(cmpVal);
+    case '<':
+      return toNumber(itemVal) < toNumber(cmpVal);
+    case '<=':
+      return toNumber(itemVal) <= toNumber(cmpVal);
+    case '>':
+      return toNumber(itemVal) > toNumber(cmpVal);
+    case '>=':
+      return toNumber(itemVal) >= toNumber(cmpVal);
+    case 'contains':
+      return toString(itemVal).includes(toString(cmpVal));
+    case 'startsWith':
+      return toString(itemVal).startsWith(toString(cmpVal));
+    case 'endsWith':
+      return toString(itemVal).endsWith(toString(cmpVal));
+    default:
+      return false;
+  }
+}
+
+/** %countIf @array "field" "op" value - count items whose field matches the condition. */
+export const countIf: VerbFunction = (args) => {
+  if (args.length < 4) return int(0);
+  const resolved = extractArray(args[0]!);
+  if (!resolved) return int(0);
+  const field = toString(args[1]!);
+  const op = toString(args[2]!);
+  const cmp = args[3]!;
+  let count = 0;
+  for (const item of resolved) {
+    if (matchesOp(itemFieldValue(item, field), op, cmp)) count++;
+  }
+  return int(count);
+};
+
+/** %sumIf @array "field" "op" value ["sumField"] - sum sumField over matching items. */
+export const sumIf: VerbFunction = (args) => {
+  if (args.length < 4) return int(0);
+  const resolved = extractArray(args[0]!);
+  if (!resolved) return int(0);
+  const field = toString(args[1]!);
+  const op = toString(args[2]!);
+  const cmp = args[3]!;
+  const sumField = args.length >= 5 ? toString(args[4]!) : field;
+  let total = 0;
+  for (const item of resolved) {
+    if (matchesOp(itemFieldValue(item, field), op, cmp)) {
+      total += toNumber(itemFieldValue(item, sumField));
+    }
+  }
+  return numericResult(total);
+};
+
+/** %avgIf @array "field" "op" value ["avgField"] - average avgField over matching items. */
+export const avgIf: VerbFunction = (args) => {
+  if (args.length < 4) return nil();
+  const resolved = extractArray(args[0]!);
+  if (!resolved) return nil();
+  const field = toString(args[1]!);
+  const op = toString(args[2]!);
+  const cmp = args[3]!;
+  const avgField = args.length >= 5 ? toString(args[4]!) : field;
+  let total = 0;
+  let count = 0;
+  for (const item of resolved) {
+    if (matchesOp(itemFieldValue(item, field), op, cmp)) {
+      total += toNumber(itemFieldValue(item, avgField));
+      count++;
+    }
+  }
+  if (count === 0) return nil();
+  return numericResult(total / count);
 };

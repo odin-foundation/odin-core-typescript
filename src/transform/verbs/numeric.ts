@@ -513,3 +513,42 @@ export const convertUnit: VerbFunction = (args) => {
   const rounded = Math.round(result * 1000000) / 1000000;
   return numericResult(rounded);
 };
+
+/** %gcd @a @b - greatest common divisor of two integers. */
+export const gcd: VerbFunction = (args) => {
+  if (args.length < 2) return nil();
+  let a = Math.abs(Math.trunc(toNumber(args[0]!)));
+  let b = Math.abs(Math.trunc(toNumber(args[1]!)));
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return nil();
+  while (b !== 0) {
+    [a, b] = [b, a % b];
+  }
+  return int(a);
+};
+
+/** %lcm @a @b - least common multiple of two integers. */
+export const lcm: VerbFunction = (args) => {
+  if (args.length < 2) return nil();
+  const a = Math.abs(Math.trunc(toNumber(args[0]!)));
+  const b = Math.abs(Math.trunc(toNumber(args[1]!)));
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return nil();
+  if (a === 0 || b === 0) return int(0);
+  let x = a;
+  let y = b;
+  while (y !== 0) {
+    [x, y] = [y, x % y];
+  }
+  const result = (a / x) * b;
+  if (!Number.isSafeInteger(result)) return nil();
+  return int(result);
+};
+
+/** %factorial @n - n! for 0 <= n <= 18 (stays within safe integer range). */
+export const factorial: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const n = toNumber(args[0]!);
+  if (!Number.isInteger(n) || n < 0 || n > 18) return nil();
+  let result = 1;
+  for (let i = 2; i <= n; i++) result *= i;
+  return int(result);
+};

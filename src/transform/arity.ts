@@ -282,6 +282,16 @@ export const VERB_ARITY: Record<string, number> = {
   buildUrl: 1,
   parseQuery: 1,
   buildQuery: 1,
+  stableStringify: 1,
+  canonicalHash: 1,
+  gcd: 2,
+  lcm: 2,
+  factorial: 1,
+  countIf: 4, // @array "field" "op" value
+  sumIf: 5, // @array "field" "op" value ["sumField"]
+  avgIf: 5, // @array "field" "op" value ["avgField"]
+  xnpv: 3, // @rate @amounts @dates
+  xirr: 3, // @amounts @dates ["guess"]
 
   // Additional generation verbs
   nanoid: 2, // [size] [seed]
@@ -405,6 +415,9 @@ export const VERB_MIN_ARITY: Record<string, number> = {
   split: 2, // index is optional (returns array when omitted)
   countBy: 1, // field is optional
   hmac: 2, // algorithm is optional (defaults to sha256)
+  sumIf: 4, // sumField is optional (defaults to the predicate field)
+  avgIf: 4, // avgField is optional (defaults to the predicate field)
+  xirr: 2, // guess is optional (defaults to 0.1)
 };
 
 /**

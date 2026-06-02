@@ -808,3 +808,91 @@ export const movingAvg: VerbFunction = (args, context) => {
 
   return arr(result);
 };
+
+// Extract an array of dates as fractional epoch days (UTC). Accepts date/timestamp
+// values, ISO date strings, or a path/JSON-array string.
+function extractDayArray(val: TransformValue, source: unknown): number[] | undefined {
+  const toDays = (item: unknown): number => {
+    if (item !== null && typeof item === 'object' && 'type' in item) {
+      const tv = item as TransformValue;
+      if ((tv.type === 'date' || tv.type === 'timestamp') && tv.value instanceof Date) {
+        return tv.value.getTime() / 86400000;
+      }
+      if (tv.type === 'string') return Date.parse(tv.value) / 86400000;
+      if (tv.type === 'integer' || tv.type === 'number') return tv.value;
+    }
+    if (item instanceof Date) return item.getTime() / 86400000;
+    if (typeof item === 'string') return Date.parse(item) / 86400000;
+    if (typeof item === 'number') return item;
+    return NaN;
+  };
+  if (val.type === 'array') return (val.items as unknown[]).map(toDays);
+  if (val.type === 'string') {
+    const s = val.value;
+    if (s.startsWith('[') && s.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return parsed.map(toDays);
+      } catch {
+        // fall through to path resolution
+      }
+    }
+    const resolved = resolvePath(s, source);
+    if (Array.isArray(resolved)) return resolved.map(toDays);
+  }
+  return undefined;
+}
+
+// Present value of dated cash flows at a given rate (365-day basis).
+function xnpvAt(rate: number, amounts: number[], days: number[]): number {
+  const d0 = days[0]!;
+  let total = 0;
+  for (let i = 0; i < amounts.length; i++) {
+    total += amounts[i]! / Math.pow(1 + rate, (days[i]! - d0) / 365);
+  }
+  return total;
+}
+
+/** %xnpv @rate @amounts @dates - net present value of cash flows on specific dates. */
+export const xnpv: VerbFunction = (args, context) => {
+  if (args.length < 3) return nil();
+  const rate = toNumber(args[0]!);
+  const amounts = extractNumericArray(args[1]!, context.source);
+  const days = extractDayArray(args[2]!, context.source);
+  if (!amounts || !days || amounts.length === 0 || amounts.length !== days.length) return nil();
+  if (days.some((d) => !Number.isFinite(d)) || amounts.some((a) => !Number.isFinite(a))) return nil();
+  const result = xnpvAt(rate, amounts, days);
+  if (!Number.isFinite(result)) return nil();
+  return numericResult(result);
+};
+
+/** %xirr @amounts @dates [guess] - internal rate of return for cash flows on specific dates. */
+export const xirr: VerbFunction = (args, context) => {
+  if (args.length < 2) return nil();
+  const amounts = extractNumericArray(args[0]!, context.source);
+  const days = extractDayArray(args[1]!, context.source);
+  if (!amounts || !days || amounts.length < 2 || amounts.length !== days.length) return nil();
+  if (days.some((d) => !Number.isFinite(d)) || amounts.some((a) => !Number.isFinite(a))) return nil();
+
+  let rate = args.length >= 3 ? toNumber(args[2]!) : 0.1;
+  const maxIterations = 100;
+  const precision = 1e-7;
+  const d0 = days[0]!;
+
+  for (let i = 0; i < maxIterations; i++) {
+    let value = 0;
+    let derivative = 0;
+    for (let j = 0; j < amounts.length; j++) {
+      const exp = (days[j]! - d0) / 365;
+      const factor = Math.pow(1 + rate, exp);
+      value += amounts[j]! / factor;
+      derivative -= (exp * amounts[j]!) / Math.pow(1 + rate, exp + 1);
+    }
+    if (Math.abs(value) < precision) return numericResult(rate);
+    if (Math.abs(derivative) < 1e-12) return nil();
+    const next = rate - value / derivative;
+    if (!Number.isFinite(next) || next <= -1) return nil();
+    rate = next;
+  }
+  return nil();
+};

@@ -825,3 +825,39 @@ export const buildUrl: VerbFunction = (args, context) => {
   if (fragment) url += `#${fragment}`;
   return str(url);
 };
+
+// Recursively serialize a JS value to JSON with object keys sorted, for a
+// canonical, stable representation independent of source key order.
+function stableJson(value: unknown): string {
+  if (value === null || value === undefined) return 'null';
+  if (Array.isArray(value)) {
+    return '[' + value.map(stableJson).join(',') + ']';
+  }
+  if (typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    const parts = keys.map(
+      (k) => JSON.stringify(k) + ':' + stableJson((value as Record<string, unknown>)[k])
+    );
+    return '{' + parts.join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
+
+/** %stableStringify @value - canonical JSON with object keys sorted recursively. */
+export const stableStringify: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  return str(stableJson(cdmToJs(args[0]!)));
+};
+
+/** %canonicalHash @value - sha256 hex of the canonical (sorted-key) JSON form. */
+export const canonicalHash: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const canonical = stableJson(cdmToJs(args[0]!));
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const crypto = require('crypto');
+    return str(crypto.createHash('sha256').update(canonical, 'utf-8').digest('hex').toLowerCase());
+  } catch {
+    return nil();
+  }
+};
