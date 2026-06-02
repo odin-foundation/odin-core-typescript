@@ -188,6 +188,13 @@ export const VERB_ARITY: Record<string, number> = {
   has: 2, // @object "key"
   get: 3, // @object "path" [default] — default is optional
   merge: 2, // @obj1 @obj2
+  pick: -1, // @object "k1", "k2" ... (variadic)
+  omit: -1, // @object "k1", "k2" ... (variadic)
+  fromEntries: 1, // @pairs
+  invert: 1, // @object
+  defaults: 2, // @object @defaults
+  renameKeys: 2, // @object @mapping
+  compactObject: 1, // @object
 
   // Additional string verbs
   reverseString: 1,

@@ -215,6 +215,13 @@ class VerbRegistryImpl implements VerbRegistry {
     this.builtIn.set('has', object.has);
     this.builtIn.set('get', object.get);
     this.builtIn.set('merge', object.merge);
+    this.builtIn.set('pick', object.pick);
+    this.builtIn.set('omit', object.omit);
+    this.builtIn.set('fromEntries', object.fromEntries);
+    this.builtIn.set('invert', object.invert);
+    this.builtIn.set('defaults', object.defaults);
+    this.builtIn.set('renameKeys', object.renameKeys);
+    this.builtIn.set('compactObject', object.compactObject);
 
     // Additional string verbs
     this.builtIn.set('reverseString', stringVerbs.reverseString);

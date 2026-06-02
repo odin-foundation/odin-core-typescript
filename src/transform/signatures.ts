@@ -388,6 +388,13 @@ export const VERB_SIGNATURES: Record<string, VerbSignature> = {
   has: { args: ['object', 'string'] },
   get: { args: ['object', 'string', 'any'] },
   merge: { args: ['object', 'object'] },
+  pick: { args: ['object'] },
+  omit: { args: ['object'] },
+  fromEntries: { args: ['array'] },
+  invert: { args: ['object'] },
+  defaults: { args: ['object', 'object'] },
+  renameKeys: { args: ['object', 'object'] },
+  compactObject: { args: ['object'] },
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Encoding Verbs

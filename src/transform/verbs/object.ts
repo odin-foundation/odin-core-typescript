@@ -4,8 +4,9 @@
  * Object manipulation: keys, values, entries, has, get, merge.
  */
 
-import type { VerbFunction } from '../../types/transform.js';
-import { toString, arr, bool, nil, jsToTransformValue } from './helpers.js';
+import type { VerbFunction, TransformValue } from '../../types/transform.js';
+import { toString, arr, obj, bool, nil, jsToTransformValue } from './helpers.js';
+import { extractArray } from './array-helpers.js';
 
 /**
  * Check if a property key is safe from prototype pollution.
@@ -190,4 +191,135 @@ export const merge: VerbFunction = (args) => {
   // Shallow merge
   const merged = { ...obj1.value, ...obj2.value };
   return { type: 'object', value: merged };
+};
+
+/**
+ * %pick @object "k1", "k2" - New object with only the named keys (argument order).
+ */
+export const pick: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const val = args[0]!;
+  if (val.type !== 'object') return nil();
+  const src = val.value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (let i = 1; i < args.length; i++) {
+    const key = toString(args[i]!);
+    if (isSafePropertyKey(key) && Object.hasOwn(src, key)) {
+      result[key] = src[key];
+    }
+  }
+  return obj(result);
+};
+
+/**
+ * %omit @object "k1", "k2" - New object without the named keys (preserves source order).
+ */
+export const omit: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const val = args[0]!;
+  if (val.type !== 'object') return nil();
+  const src = val.value as Record<string, unknown>;
+  const drop = new Set<string>();
+  for (let i = 1; i < args.length; i++) drop.add(toString(args[i]!));
+  const result: Record<string, unknown> = {};
+  for (const k of getSafeKeys(src)) {
+    if (!drop.has(k)) result[k] = src[k];
+  }
+  return obj(result);
+};
+
+/**
+ * %fromEntries @pairs - Build an object from an array of [key, value] pairs (pair order).
+ */
+export const fromEntries: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const pairs = extractArray(args[0]!);
+  if (!pairs) return nil();
+  const result: Record<string, unknown> = {};
+  for (const entry of pairs) {
+    const pair = Array.isArray(entry)
+      ? entry
+      : entry && typeof entry === 'object' && (entry as TransformValue).type === 'array'
+        ? extractArray(entry as TransformValue)
+        : null;
+    if (!pair || pair.length < 2) continue;
+    const key = toString(jsToTransformValue(pair[0]));
+    if (isSafePropertyKey(key)) result[key] = pair[1];
+  }
+  return obj(result);
+};
+
+/**
+ * %invert @object - Swap keys and values; values become string keys (last wins on duplicates).
+ */
+export const invert: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const val = args[0]!;
+  if (val.type !== 'object') return nil();
+  const src = val.value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const k of getSafeKeys(src)) {
+    const newKey = toString(jsToTransformValue(src[k]));
+    if (isSafePropertyKey(newKey)) result[newKey] = k;
+  }
+  return obj(result);
+};
+
+/**
+ * %defaults @object @defaults - Fill keys missing from object using defaults (object wins).
+ */
+export const defaults: VerbFunction = (args) => {
+  if (args.length < 2) return nil();
+  const a = args[0]!;
+  const d = args[1]!;
+  if (a.type !== 'object') return d.type === 'object' ? d : nil();
+  if (d.type !== 'object') return a;
+  const src = a.value as Record<string, unknown>;
+  const def = d.value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const k of getSafeKeys(src)) result[k] = src[k];
+  for (const k of getSafeKeys(def)) {
+    if (!Object.hasOwn(result, k)) result[k] = def[k];
+  }
+  return obj(result);
+};
+
+/**
+ * %renameKeys @object @mapping - Rename keys named in the mapping (old -> new), keeping position.
+ */
+export const renameKeys: VerbFunction = (args) => {
+  if (args.length < 2) return nil();
+  const val = args[0]!;
+  const map = args[1]!;
+  if (val.type !== 'object') return nil();
+  if (map.type !== 'object') return val;
+  const src = val.value as Record<string, unknown>;
+  const rename = map.value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const k of getSafeKeys(src)) {
+    const newKey =
+      Object.hasOwn(rename, k) ? toString(jsToTransformValue(rename[k])) : k;
+    if (isSafePropertyKey(newKey)) result[newKey] = src[k];
+  }
+  return obj(result);
+};
+
+/**
+ * %compactObject @object - Drop entries whose value is null, empty string, empty array, or empty object.
+ */
+export const compactObject: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const val = args[0]!;
+  if (val.type !== 'object') return nil();
+  const src = val.value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const k of getSafeKeys(src)) {
+    const v = src[k];
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'string' && v === '') continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v as object).length === 0) continue;
+    result[k] = v;
+  }
+  return obj(result);
 };
