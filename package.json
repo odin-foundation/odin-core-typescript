@@ -1,11 +1,15 @@
 {
   "name": "@odin-foundation/core",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Official TypeScript implementation of ODIN (Open Data Interchange Notation)",
   "type": "module",
   "main": "dist/cjs/index.cjs",
   "module": "dist/esm/index.js",
   "types": "dist/types/index.d.ts",
+  "browser": {
+    "./dist/esm/resolver/file-loader.js": "./dist/esm/resolver/file-loader.browser.js",
+    "./dist/cjs/resolver/file-loader.cjs": "./dist/cjs/resolver/file-loader.browser.cjs"
+  },
   "exports": {
     ".": {
       "import": {
