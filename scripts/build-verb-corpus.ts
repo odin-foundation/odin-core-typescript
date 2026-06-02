@@ -81,7 +81,7 @@ function renderCard(f: CorpusFixture): string {
 
 function main(): void {
   const loaded = loadFixtures(CORPUS_DIR).filter(
-    ({ file }) => !/[\\/](errors|idioms)[\\/]/.test(file),
+    ({ file }) => !/[\\/](errors|idioms|expr)[\\/]/.test(file),
   );
   const verbs = loaded.map((l) => l.fixture);
 
