@@ -21,6 +21,7 @@ import type {
   Discriminator,
 } from '../types/transform.js';
 import { parseValueExpression } from './parser-expressions.js';
+import { compileExpr, ExprSyntaxError } from './expr.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Parser Class
@@ -747,6 +748,22 @@ class TransformParser {
    * Convert an OdinVerbExpression to a ValueExpression.
    */
   private odinVerbToValueExpression(value: OdinValue & { type: 'verb' }): ValueExpression {
+    // %expr is a parse-time macro: compile the formula string into a verb tree.
+    if (value.verb === 'expr' && !value.isCustom) {
+      const arg0 = value.args[0];
+      if (!arg0 || arg0.type !== 'string') {
+        throw new ExprSyntaxError('expected a quoted formula string');
+      }
+      const arg1 = value.args[1];
+      let bindingPath: string | null = null;
+      if (arg1 !== undefined) {
+        if (arg1.type !== 'reference') {
+          throw new ExprSyntaxError('the bindings argument must be a reference such as @.vars');
+        }
+        bindingPath = arg1.path;
+      }
+      return compileExpr(arg0.value, bindingPath);
+    }
     const args: ValueExpression[] = value.args.map((arg) => this.odinValueToValueExpression(arg));
     return {
       type: 'transform',

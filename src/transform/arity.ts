@@ -287,6 +287,8 @@ export const VERB_ARITY: Record<string, number> = {
   gcd: 2,
   lcm: 2,
   factorial: 1,
+  expr: 2, // "formula" [@bindings] — parse-time macro, compiled to a verb tree
+
   countIf: 4, // @array "field" "op" value
   sumIf: 5, // @array "field" "op" value ["sumField"]
   avgIf: 5, // @array "field" "op" value ["avgField"]
@@ -415,6 +417,7 @@ export const VERB_MIN_ARITY: Record<string, number> = {
   split: 2, // index is optional (returns array when omitted)
   countBy: 1, // field is optional
   hmac: 2, // algorithm is optional (defaults to sha256)
+  expr: 1, // bindings object is optional (required only when the formula has variables)
   sumIf: 4, // sumField is optional (defaults to the predicate field)
   avgIf: 4, // avgField is optional (defaults to the predicate field)
   xirr: 2, // guess is optional (defaults to 0.1)

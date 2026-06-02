@@ -60,6 +60,9 @@ export const TransformErrorCodes = {
   /** Nested ${...} interpolation inside a literal block */
   T014_NESTED_INTERPOLATION: 'T014',
 
+  /** Invalid %expr formula - cannot compile to a verb tree */
+  T015_INVALID_EXPRESSION: 'T015',
+
   // Extended codes (implementation-specific)
 
   /** Configuration error - transform document is misconfigured */

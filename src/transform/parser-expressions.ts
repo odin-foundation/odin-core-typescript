@@ -6,6 +6,7 @@
 
 import type { ValueExpression } from '../types/transform.js';
 import { getVerbArity } from './arity.js';
+import { compileExpr, ExprSyntaxError } from './expr.js';
 
 /**
  * Parse a value expression from a raw string.
@@ -105,6 +106,23 @@ export function parseTransformExpressionWithLength(raw: string): {
   const { args, consumed: argsConsumed } = parseTransformArgs(argsStr, arity);
 
   const totalConsumed = verbEnd + argsConsumed;
+
+  // %expr is a parse-time macro: compile the formula string into a verb tree.
+  if (verb === 'expr' && !isCustom) {
+    const arg0 = args[0];
+    if (!arg0 || arg0.type !== 'literal' || arg0.value.type !== 'string') {
+      throw new ExprSyntaxError('expected a quoted formula string');
+    }
+    const arg1 = args[1];
+    let bindingPath: string | null = null;
+    if (arg1 !== undefined) {
+      if (arg1.type !== 'copy') {
+        throw new ExprSyntaxError('the bindings argument must be a reference such as @.vars');
+      }
+      bindingPath = arg1.path;
+    }
+    return { expr: compileExpr(arg0.value.value, bindingPath), consumed: totalConsumed };
+  }
 
   return {
     expr: {
