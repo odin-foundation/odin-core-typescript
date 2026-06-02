@@ -3,22 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { renderForm } from '../../src/forms/renderer.js';
 import { parseForm } from '../../src/forms/parser.js';
 import { generateFormCSS, generatePrintCSS } from '../../src/forms/css.js';
 import type { OdinForm } from '../../src/forms/types.js';
 import { Odin } from '../../src/odin.js';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Golden fixture
-// ─────────────────────────────────────────────────────────────────────────────
-
-const fixtureText = readFileSync(
-  join(import.meta.dirname, '../../../golden/forms/simple-form.odin'),
-  'utf-8',
-);
+import { SIMPLE_FORM as fixtureText } from './sample-form.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal test form for isolated tests

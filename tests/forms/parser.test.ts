@@ -3,18 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { parseForm } from '../../src/forms/parser.js';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Golden fixture
-// ─────────────────────────────────────────────────────────────────────────────
-
-const fixtureText = readFileSync(
-  join(import.meta.dirname, '../../../golden/forms/simple-form.odin'),
-  'utf-8'
-);
+import { SIMPLE_FORM as fixtureText } from './sample-form.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Metadata tests
