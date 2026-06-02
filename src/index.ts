@@ -2,7 +2,6 @@
  * @odin-foundation/core
  *
  * Official TypeScript implementation of ODIN (Open Data Interchange Notation)
- * Canonical reference implementation - all other language implementations must match this behavior.
  *
  * @example
  * ```typescript
