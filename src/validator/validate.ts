@@ -47,6 +47,9 @@ interface SchemaMemo {
   errors: ValidationError[]; // V017 + V012/V013
   warnings: ValidationWarning[]; // W001 from composition expansion
   expandedFields: Map<string, SchemaField>;
+  // Fields whose type is a composition (typeRef/reference); precomputed so
+  // composition-free schemas skip the per-document augmentation entirely.
+  compositionFields: Array<[string, SchemaField]>;
 }
 
 /**
@@ -86,11 +89,24 @@ function getSchemaMemo(
   validateSchemaTypeReferences(memoCtx);
   const expandedFields = expandSchemaFields(memoCtx);
 
+  // Precompute the composition (typeRef/reference) fields once so per-document
+  // augmentation can skip the field scan and the base-map copy for the common
+  // composition-free case.
+  const compositionFields: Array<[string, SchemaField]> = [];
+  for (const entry of expandedFields) {
+    const [path, field] = entry;
+    if (path.endsWith('._composition')) continue;
+    const isComposition =
+      field.type.kind === 'typeRef' || field.type.kind === 'reference';
+    if (isComposition) compositionFields.push(entry);
+  }
+
   const memo: SchemaMemo = {
     typeRegistry,
     errors: memoCtx.errors,
     warnings: memoCtx.warnings,
     expandedFields,
+    compositionFields,
   };
   schemaMemoCache.set(schema, memo);
   return memo;
@@ -166,7 +182,11 @@ export function validate(
   }
 
   // Augment cached schema fields with document-dependent type-ref compositions.
-  const expandedFields = augmentWithPresentCompositions(ctx, memo.expandedFields);
+  const expandedFields = augmentWithPresentCompositions(
+    ctx,
+    memo.expandedFields,
+    memo.compositionFields
+  );
 
   // Validate each field defined in the schema
   for (const [path, fieldSchema] of expandedFields) {
@@ -288,17 +308,19 @@ function expandSchemaFields(ctx: ValidationContext): Map<string, SchemaField> {
  * document: a field typed as `@SomeType` enforces that type's fields under the
  * field path when the sub-object is present or the field is required.
  *
- * Returns a fresh map; the cached base map is never mutated.
+ * The common composition-free path returns the cached base map untouched; a
+ * copy is made lazily only when a present composition actually adds fields.
  */
 function augmentWithPresentCompositions(
   ctx: ValidationContext,
-  baseFields: Map<string, SchemaField>
+  baseFields: Map<string, SchemaField>,
+  compositionFields: Array<[string, SchemaField]>
 ): Map<string, SchemaField> {
-  const result = new Map(baseFields);
+  if (compositionFields.length === 0) return baseFields;
 
-  for (const [path, field] of baseFields) {
-    if (path.endsWith('._composition')) continue;
+  let result: Map<string, SchemaField> | null = null;
 
+  for (const [path, field] of compositionFields) {
     const refName =
       field.type.kind === 'typeRef' ? field.type.name :
       field.type.kind === 'reference' ? field.type.targetPath :
@@ -312,6 +334,7 @@ function augmentWithPresentCompositions(
     const present = isObjectPresent(ctx, path);
     if (!present && !field.required) continue;
 
+    if (result === null) result = new Map(baseFields);
     for (const typeDef of typeDefs) {
       for (const [fieldName, typeField] of typeDef.fields) {
         if (fieldName === '_composition') continue;
@@ -323,7 +346,7 @@ function augmentWithPresentCompositions(
     }
   }
 
-  return result;
+  return result ?? baseFields;
 }
 
 /**
