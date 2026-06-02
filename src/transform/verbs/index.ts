@@ -280,6 +280,14 @@ class VerbRegistryImpl implements VerbRegistry {
     this.builtIn.set('zip', array.zip);
     this.builtIn.set('groupBy', array.groupBy);
     this.builtIn.set('partition', array.partition);
+    this.builtIn.set('intersection', array.intersection);
+    this.builtIn.set('union', array.union);
+    this.builtIn.set('difference', array.difference);
+    this.builtIn.set('symmetricDifference', array.symmetricDifference);
+    this.builtIn.set('countBy', array.countBy);
+    this.builtIn.set('keyBy', array.keyBy);
+    this.builtIn.set('explode', array.explode);
+    this.builtIn.set('window', array.window);
     this.builtIn.set('take', array.take);
     this.builtIn.set('drop', array.drop);
     this.builtIn.set('chunk', array.chunk);

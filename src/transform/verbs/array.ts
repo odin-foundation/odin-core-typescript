@@ -1533,3 +1533,179 @@ export const unpivot: VerbFunction = (args) => {
 
   return arr(result);
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Set operations + collection
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Canonical equality key, matching distinct's dedup semantics.
+function valueKey(item: unknown): string {
+  return JSON.stringify(getComparableValue(item));
+}
+
+function isSafeKey(key: string): boolean {
+  const k = key.toLowerCase();
+  return k !== '__proto__' && k !== 'constructor' && k !== 'prototype';
+}
+
+/** %intersection @a @b - values present in both, deduped, in order of first occurrence in A. */
+export const intersection: VerbFunction = (args) => {
+  if (args.length < 2) return arr([]);
+  const a = extractArray(args[0]!);
+  const b = extractArray(args[1]!);
+  if (!a || !b) return arr([]);
+  const bKeys = new Set(b.map(valueKey));
+  const seen = new Set<string>();
+  const result: unknown[] = [];
+  for (const item of a) {
+    const k = valueKey(item);
+    if (bKeys.has(k) && !seen.has(k)) {
+      seen.add(k);
+      result.push(item);
+    }
+  }
+  return arr(result);
+};
+
+/** %union @a @b - values in either, deduped, A first then new-from-B. */
+export const union: VerbFunction = (args) => {
+  if (args.length < 2) return arr([]);
+  const a = extractArray(args[0]!) ?? [];
+  const b = extractArray(args[1]!) ?? [];
+  const seen = new Set<string>();
+  const result: unknown[] = [];
+  for (const item of [...a, ...b]) {
+    const k = valueKey(item);
+    if (!seen.has(k)) {
+      seen.add(k);
+      result.push(item);
+    }
+  }
+  return arr(result);
+};
+
+/** %difference @a @b - values in A not in B, deduped, in order of A. */
+export const difference: VerbFunction = (args) => {
+  if (args.length < 2) return arr([]);
+  const a = extractArray(args[0]!);
+  if (!a) return arr([]);
+  const bKeys = new Set((extractArray(args[1]!) ?? []).map(valueKey));
+  const seen = new Set<string>();
+  const result: unknown[] = [];
+  for (const item of a) {
+    const k = valueKey(item);
+    if (!bKeys.has(k) && !seen.has(k)) {
+      seen.add(k);
+      result.push(item);
+    }
+  }
+  return arr(result);
+};
+
+/** %symmetricDifference @a @b - values in exactly one, A-only then B-only, deduped. */
+export const symmetricDifference: VerbFunction = (args) => {
+  if (args.length < 2) return arr([]);
+  const a = extractArray(args[0]!) ?? [];
+  const b = extractArray(args[1]!) ?? [];
+  const aKeys = new Set(a.map(valueKey));
+  const bKeys = new Set(b.map(valueKey));
+  const seen = new Set<string>();
+  const result: unknown[] = [];
+  for (const item of a) {
+    const k = valueKey(item);
+    if (!bKeys.has(k) && !seen.has(k)) {
+      seen.add(k);
+      result.push(item);
+    }
+  }
+  for (const item of b) {
+    const k = valueKey(item);
+    if (!aKeys.has(k) && !seen.has(k)) {
+      seen.add(k);
+      result.push(item);
+    }
+  }
+  return arr(result);
+};
+
+/** %countBy @items ["field"] - map of value (or field value) to occurrence count; keys sorted. */
+export const countBy: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const resolved = extractArray(args[0]!);
+  if (!resolved) return nil();
+  const field = args.length > 1 ? toString(args[1]!) : null;
+  const counts = new Map<string, number>();
+  for (const item of resolved) {
+    const v = field ? getFieldValue(item, field) : item;
+    const key = toString(jsToTransformValue(v));
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const result: Record<string, unknown> = {};
+  for (const key of [...counts.keys()].sort()) {
+    if (isSafeKey(key)) result[key] = int(counts.get(key)!);
+  }
+  return obj(result);
+};
+
+/** %keyBy @items "field" - object keyed by each item's field value (last wins on duplicates). */
+export const keyBy: VerbFunction = (args) => {
+  if (args.length < 2) return nil();
+  const resolved = extractArray(args[0]!);
+  if (!resolved) return nil();
+  const field = toString(args[1]!);
+  const result: Record<string, unknown> = {};
+  for (const item of resolved) {
+    const key = toString(jsToTransformValue(getFieldValue(item, field)));
+    if (isSafeKey(key)) result[key] = item;
+  }
+  return obj(result);
+};
+
+/** %explode @rows "field" - one row per element of the named array field. */
+export const explode: VerbFunction = (args) => {
+  if (args.length < 2) return arr([]);
+  const resolved = extractArray(args[0]!);
+  if (!resolved) return arr([]);
+  const field = toString(args[1]!);
+  const result: unknown[] = [];
+  for (const item of resolved) {
+    if (typeof item !== 'object' || item === null) {
+      result.push(item);
+      continue;
+    }
+    const fieldVal = getFieldValue(item, field);
+    const elements = Array.isArray(fieldVal)
+      ? fieldVal
+      : fieldVal && typeof fieldVal === 'object' && (fieldVal as TransformValue).type === 'array'
+        ? extractArray(fieldVal as TransformValue)
+        : null;
+    // Base object (handle CDM-wrapped objects).
+    const itemObj = item as Record<string, unknown>;
+    const base =
+      itemObj.type === 'object' && itemObj.value && typeof itemObj.value === 'object'
+        ? (itemObj.value as Record<string, unknown>)
+        : itemObj;
+    if (!elements || elements.length === 0) {
+      result.push({ ...base });
+      continue;
+    }
+    for (const el of elements) {
+      result.push({ ...base, [field]: el });
+    }
+  }
+  return arr(result);
+};
+
+/** %window @items ##n - sliding windows of length n (empty if n <= 0 or larger than the array). */
+export const window: VerbFunction = (args) => {
+  if (args.length < 2) return arr([]);
+  const resolved = extractArray(args[0]!);
+  if (!resolved) return arr([]);
+  const n = Math.floor(toNumber(args[1]!));
+  if (n <= 0 || resolved.length < n) return arr([]);
+  const result: unknown[] = [];
+  for (let i = 0; i + n <= resolved.length; i++) {
+    result.push(arr(resolved.slice(i, i + n)));
+  }
+  return arr(result);
+};

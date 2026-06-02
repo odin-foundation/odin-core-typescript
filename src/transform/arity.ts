@@ -251,6 +251,14 @@ export const VERB_ARITY: Record<string, number> = {
   includes: 2, // @array value
   concatArrays: 2, // @arr1 @arr2
   zip: 2, // @arr1 @arr2
+  intersection: 2, // @a @b
+  union: 2, // @a @b
+  difference: 2, // @a @b
+  symmetricDifference: 2, // @a @b
+  countBy: 2, // @items [field] — field optional
+  keyBy: 2, // @items "field"
+  explode: 2, // @rows "field"
+  window: 2, // @items ##n
   groupBy: 2, // @array "field"
   partition: 4, // @array "field" "op" value
   take: 2, // @array count
@@ -383,6 +391,7 @@ export const VERB_MIN_ARITY: Record<string, number> = {
   padRight: 2, // pad char is optional (defaults to space)
   pad: 2, // pad char is optional (defaults to space)
   split: 2, // index is optional (returns array when omitted)
+  countBy: 1, // field is optional
 };
 
 /**
