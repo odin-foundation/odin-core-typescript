@@ -17,9 +17,11 @@ import type {
   FieldMapping,
   Modifier,
   ValueExpression,
+  TransformExpression,
   VerbRegistry,
 } from '../types/transform.js';
 import { defaultVerbRegistry } from './verbs.js';
+import { toBoolean, isNull, isEmpty, toString, bool, nil } from './verbs/helpers.js';
 import { resolvePath } from './utils.js';
 import { getVerbArity, getVerbMinArity } from './arity.js';
 import { validateVerbArgTypes } from './signatures.js';
@@ -82,6 +84,21 @@ import type { TransformOptions, MultiRecordInput } from './engine-types.js';
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Arity metadata depends only on the verb name; cache it across calls.
+// Control-flow verbs whose branch arguments are evaluated lazily (only the
+// selected branch runs). Their results are identical to eager evaluation for
+// pure-value branches; the difference is short-circuiting and not firing the
+// side effects of unselected branches.
+const LAZY_VERBS = new Set([
+  'ifElse',
+  'ifNull',
+  'ifEmpty',
+  'coalesce',
+  'and',
+  'or',
+  'cond',
+  'switch',
+]);
+
 const verbArityCache = new Map<string, { arity: number; minArity: number }>();
 function resolveVerbArity(verb: string): { arity: number; minArity: number } {
   let entry = verbArityCache.get(verb);
@@ -1334,6 +1351,16 @@ class TransformEngine {
           );
         }
 
+        // Control-flow verbs evaluate their branches lazily: the condition is
+        // evaluated first and only the selected branch is evaluated, so
+        // unselected branches do not fire side effects and `and`/`or`/`coalesce`
+        // short-circuit. For pure-value branches the result is identical.
+        // Strict mode validates all argument types, so it evaluates eagerly.
+        if (!expr.isCustom && !this.strictTypes && LAZY_VERBS.has(expr.verb)) {
+          const lazy = this.evaluateLazyVerb(expr, context);
+          if (lazy.handled) return lazy.value;
+        }
+
         const args = expr.args.map((arg) => this.evaluateExpression(arg, context));
 
         // Type validation (if strict mode enabled)
@@ -1356,6 +1383,67 @@ class TransformEngine {
         return { type: 'string', value: JSON.stringify(obj) };
       }
     }
+  }
+
+  // Evaluate a control-flow verb lazily, evaluating only the arguments needed
+  // to decide the result. Returns handled=false to defer to eager evaluation
+  // (e.g. when there are too few arguments). Selector verbs return the chosen
+  // argument unchanged; `and`/`or` short-circuit to a boolean.
+  private evaluateLazyVerb(
+    expr: TransformExpression,
+    context: TransformContext
+  ): { handled: boolean; value: TransformValue } {
+    const a = expr.args;
+    const ev = (i: number): TransformValue => this.evaluateExpression(a[i]!, context);
+    const ok = (value: TransformValue) => ({ handled: true, value });
+    switch (expr.verb) {
+      case 'ifElse':
+        if (a.length < 3) break;
+        return ok(toBoolean(ev(0)) ? ev(1) : ev(2));
+      case 'ifNull': {
+        if (a.length < 2) break;
+        const v0 = ev(0);
+        return ok(isNull(v0) ? ev(1) : v0);
+      }
+      case 'ifEmpty': {
+        if (a.length < 2) break;
+        const v0 = ev(0);
+        return ok(isEmpty(v0) ? ev(1) : v0);
+      }
+      case 'coalesce': {
+        for (let i = 0; i < a.length; i++) {
+          const v = ev(i);
+          if (!isNull(v)) return ok(v);
+        }
+        return ok(nil());
+      }
+      case 'and':
+        if (a.length < 2) break;
+        if (!toBoolean(ev(0))) return ok(bool(false));
+        return ok(bool(toBoolean(ev(1))));
+      case 'or':
+        if (a.length < 2) break;
+        if (toBoolean(ev(0))) return ok(bool(true));
+        return ok(bool(toBoolean(ev(1))));
+      case 'cond': {
+        if (a.length === 0) break;
+        let i = 0;
+        while (i < a.length - 1) {
+          if (toBoolean(ev(i))) return ok(ev(i + 1));
+          i += 2;
+        }
+        return ok(a.length % 2 === 1 ? ev(a.length - 1) : nil());
+      }
+      case 'switch': {
+        if (a.length < 2) break;
+        const subject = toString(ev(0));
+        for (let i = 1; i < a.length - 1; i += 2) {
+          if (subject === toString(ev(i))) return ok(ev(i + 1));
+        }
+        return ok((a.length - 1) % 2 === 1 ? ev(a.length - 1) : nil());
+      }
+    }
+    return { handled: false, value: nil() };
   }
 
   // Whether a mapping copies a source path that is absent (undefined) — distinct
