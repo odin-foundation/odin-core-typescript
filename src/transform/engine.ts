@@ -1122,7 +1122,9 @@ class TransformEngine {
         value = { type: 'array', items: [value] };
       }
 
-      if (mapping.target !== '_') {
+      // `_`-prefixed targets are computation-only sinks: evaluated for side
+      // effects (accumulators, counters) but never emitted to the output.
+      if (!mapping.target.startsWith('_')) {
         output[mapping.target] = value;
       }
     } catch (err) {

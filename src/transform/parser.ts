@@ -516,7 +516,18 @@ class TransformParser {
           }
           // Other directives
           const directive = this.parseDirective(fieldPath, path);
-          if (directive) segment.directives.push(directive);
+          if (directive) {
+            segment.directives.push(directive);
+          } else if (fieldPath.startsWith('_') && !fieldPath.includes('[')) {
+            // An unrecognized `_`-prefixed field is a computation-only sink:
+            // it runs for side effects (e.g. a second %accumulate) and is not
+            // emitted. Several such fields can coexist in one section.
+            const value = this.doc.get(path);
+            if (value) {
+              const mapping = this.parseMapping(fieldPath, value);
+              if (mapping) segment.mappings.push(mapping);
+            }
+          }
         } else if (!fieldPath.includes('[')) {
           // Mapping
           const value = this.doc.get(path);
