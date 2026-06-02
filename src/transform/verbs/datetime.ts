@@ -206,7 +206,12 @@ export const addMonths: VerbFunction = (args) => {
   }
 
   const months = Math.floor(toNumber(args[1]!));
+  // Clamp to the last valid day of the target month (no overflow rollover).
+  const dom = date.getUTCDate();
+  date.setUTCDate(1);
   date.setUTCMonth(date.getUTCMonth() + months);
+  const lastDom = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(dom, lastDom));
 
   // Return ISO date string (YYYY-MM-DD)
   const year = date.getUTCFullYear();
@@ -237,7 +242,12 @@ export const addYears: VerbFunction = (args) => {
   }
 
   const years = Math.floor(toNumber(args[1]!));
+  // Clamp Feb 29 to Feb 28 in a non-leap target year (no overflow rollover).
+  const dom = date.getUTCDate();
+  date.setUTCDate(1);
   date.setUTCFullYear(date.getUTCFullYear() + years);
+  const lastDom = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(dom, lastDom));
 
   // Return ISO date string (YYYY-MM-DD)
   const year = date.getUTCFullYear();

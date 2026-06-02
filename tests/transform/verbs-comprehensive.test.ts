@@ -563,18 +563,18 @@ describe('DateTime verb edge cases', () => {
   });
 
   describe('month boundary addMonths', () => {
-    it('adding month from Jan 31 wraps to Mar in non-leap year', () => {
+    it('adding month from Jan 31 clamps to end of Feb in non-leap year', () => {
       const result = callVerb('addMonths', [str('2023-01-31'), int(1)]);
-      // Jan 31 + 1 month = Feb 31 which wraps to March 3
+      // Jan 31 + 1 month clamps to the last day of Feb (no overflow rollover)
       expect(result.type).toBe('string');
-      expect(result.value).toBe('2023-03-03');
+      expect(result.value).toBe('2023-02-28');
     });
 
-    it('adding month from Jan 31 wraps to Mar in leap year', () => {
+    it('adding month from Jan 31 clamps to Feb 29 in leap year', () => {
       const result = callVerb('addMonths', [str('2024-01-31'), int(1)]);
-      // Jan 31 + 1 month = Feb 31 which wraps to March 2 in leap year
+      // Jan 31 + 1 month clamps to Feb 29 in a leap year
       expect(result.type).toBe('string');
-      expect(result.value).toBe('2024-03-02');
+      expect(result.value).toBe('2024-02-29');
     });
 
     it('subtracting months crosses year boundary', () => {
@@ -591,9 +591,9 @@ describe('DateTime verb edge cases', () => {
 
     it('addYears on Feb 29 in leap year', () => {
       const result = callVerb('addYears', [str('2024-02-29'), int(1)]);
-      // Feb 29 + 1 year = 2025 which has no Feb 29, wraps to March 1
+      // Feb 29 + 1 year clamps to Feb 28 in the non-leap target year
       expect(result.type).toBe('string');
-      expect(result.value).toBe('2025-03-01');
+      expect(result.value).toBe('2025-02-28');
     });
   });
 

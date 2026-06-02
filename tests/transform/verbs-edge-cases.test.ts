@@ -480,13 +480,13 @@ describe('Verb Edge Cases', () => {
         }
       });
 
-      it('addMonths handles day overflow', () => {
+      it('addMonths clamps day overflow to month end', () => {
         const d = new Date(Date.UTC(2024, 0, 31)); // Jan 31
         const result = callVerb('addMonths', [date(d), int(1)]);
         expect(result.type).toBe('string');
         if (result.type === 'string') {
-          // Feb doesn't have 31 days, JavaScript Date rolls over to Mar 2
-          expect(result.value).toBe('2024-03-02');
+          // Feb has no 31st, so the day clamps to Feb 29 (leap year)
+          expect(result.value).toBe('2024-02-29');
         }
       });
 
@@ -499,13 +499,13 @@ describe('Verb Edge Cases', () => {
         }
       });
 
-      it('addYears handles leap year boundary', () => {
+      it('addYears clamps leap day to month end', () => {
         const d = new Date(Date.UTC(2024, 1, 29)); // Feb 29 2024 (leap year)
         const result = callVerb('addYears', [date(d), int(1)]);
         expect(result.type).toBe('string');
         if (result.type === 'string') {
-          // Feb 29 2025 doesn't exist, rolls over to Mar 1
-          expect(result.value).toBe('2025-03-01');
+          // Feb 29 2025 does not exist, so the day clamps to Feb 28
+          expect(result.value).toBe('2025-02-28');
         }
       });
     });
