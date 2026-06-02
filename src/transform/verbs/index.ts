@@ -301,6 +301,13 @@ class VerbRegistryImpl implements VerbRegistry {
     this.builtIn.set('md5', encoding.md5);
     this.builtIn.set('sha1', encoding.sha1);
     this.builtIn.set('sha512', encoding.sha512);
+    this.builtIn.set('base64urlEncode', encoding.base64urlEncode);
+    this.builtIn.set('base64urlDecode', encoding.base64urlDecode);
+    this.builtIn.set('hmac', encoding.hmac);
+    this.builtIn.set('parseUrl', encoding.parseUrl);
+    this.builtIn.set('buildUrl', encoding.buildUrl);
+    this.builtIn.set('parseQuery', encoding.parseQuery);
+    this.builtIn.set('buildQuery', encoding.buildQuery);
     this.builtIn.set('crc32', encoding.crc32);
 
     // Additional generation verbs
@@ -383,6 +390,11 @@ class VerbRegistryImpl implements VerbRegistry {
     this.builtIn.set('unpivot', array.unpivot);
     // String formatting
     this.builtIn.set('formatPhone', stringVerbs.formatPhone);
+    this.builtIn.set('escapeHtml', stringVerbs.escapeHtml);
+    this.builtIn.set('unescapeHtml', stringVerbs.unescapeHtml);
+    this.builtIn.set('escapeXml', stringVerbs.escapeXml);
+    this.builtIn.set('stripTags', stringVerbs.stripTags);
+    this.builtIn.set('template', stringVerbs.template);
     // Financial
     this.builtIn.set('movingAvg', financial.movingAvg);
     // DateTime

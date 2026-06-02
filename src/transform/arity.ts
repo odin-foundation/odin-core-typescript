@@ -275,6 +275,13 @@ export const VERB_ARITY: Record<string, number> = {
   sha1: 1,
   sha512: 1,
   crc32: 1,
+  base64urlEncode: 1,
+  base64urlDecode: 1,
+  hmac: 3, // @message "key" ["algorithm"] — algorithm optional
+  parseUrl: 1,
+  buildUrl: 1,
+  parseQuery: 1,
+  buildQuery: 1,
 
   // Additional generation verbs
   nanoid: 2, // [size] [seed]
@@ -351,6 +358,11 @@ export const VERB_ARITY: Record<string, number> = {
   pivot: 3, // @array "keyField" "valueField"
   unpivot: 3, // @object "keyName" "valueName"
   formatPhone: 2, // @value "countryCode"
+  escapeHtml: 1,
+  unescapeHtml: 1,
+  escapeXml: 1,
+  stripTags: 1,
+  template: 2, // "template {key}" @data
   movingAvg: 2, // @array ##windowSize
   businessDays: 2, // @date ##count
   nextBusinessDay: 1, // @date
@@ -392,6 +404,7 @@ export const VERB_MIN_ARITY: Record<string, number> = {
   pad: 2, // pad char is optional (defaults to space)
   split: 2, // index is optional (returns array when omitted)
   countBy: 1, // field is optional
+  hmac: 2, // algorithm is optional (defaults to sha256)
 };
 
 /**

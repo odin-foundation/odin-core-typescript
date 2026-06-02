@@ -7,7 +7,7 @@
  */
 
 import type { VerbFunction } from '../../types/transform.js';
-import { toString, toNumber, str, int, bool, nil, extractStringValue } from './helpers.js';
+import { toString, toNumber, str, int, bool, nil, extractStringValue, jsToTransformValue } from './helpers.js';
 import { SECURITY_LIMITS } from '../../utils/security-limits.js';
 
 /**
@@ -891,4 +891,72 @@ export const formatPhone: VerbFunction = (args) => {
     default:
       return str(raw); // Unknown country code
   }
+};
+
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
+
+const HTML_UNESCAPES: Record<string, string> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+  '&apos;': "'",
+};
+
+/** %escapeHtml @path - escape &<>"' as HTML entities. */
+export const escapeHtml: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  return str(toString(args[0]!).replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c));
+};
+
+/** %unescapeHtml @path - decode HTML entities, including numeric references. */
+export const unescapeHtml: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const s = toString(args[0]!).replace(/&(?:amp|lt|gt|quot|apos|#39);/g, (m) => HTML_UNESCAPES[m] ?? m);
+  return str(
+    s.replace(/&#(\d+);/g, (_m, d: string) => String.fromCodePoint(Number(d)))
+      .replace(/&#x([0-9a-fA-F]+);/g, (_m, h: string) => String.fromCodePoint(parseInt(h, 16)))
+  );
+};
+
+/** %escapeXml @path - escape &<>"' as XML entities (apostrophe as &apos;). */
+export const escapeXml: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  return str(
+    toString(args[0]!).replace(/[&<>"']/g, (c) => {
+      if (c === "'") return '&apos;';
+      return HTML_ESCAPES[c] ?? c;
+    })
+  );
+};
+
+/** %stripTags @path - remove HTML/XML tags, leaving text content. */
+export const stripTags: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  return str(toString(args[0]!).replace(/<[^>]*>/g, ''));
+};
+
+/** %template "Hello {name}" @data - substitute {key} placeholders from an object. */
+export const template: VerbFunction = (args) => {
+  if (args.length < 2) return nil();
+  const tpl = toString(args[0]!);
+  const src = args[1]!;
+  const fields: Record<string, unknown> =
+    src.type === 'object' ? (src.value as Record<string, unknown>) : {};
+  return str(
+    tpl.replace(/\{([^{}]+)\}/g, (_m, key: string) => {
+      const k = key.trim();
+      if (!Object.prototype.hasOwnProperty.call(fields, k)) return '';
+      const v = fields[k];
+      if (v === null || v === undefined) return '';
+      return toString(jsToTransformValue(v));
+    })
+  );
 };

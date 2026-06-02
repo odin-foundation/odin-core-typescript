@@ -6,7 +6,7 @@
  */
 
 import type { VerbFunction, TransformValue } from '../../types/transform.js';
-import { toString, str, nil } from './helpers.js';
+import { toString, str, nil, obj } from './helpers.js';
 
 /**
  * Convert a CDM TransformValue to a raw JS value for JSON serialization.
@@ -706,3 +706,122 @@ function findRecursive(data: unknown, field: string): unknown[] {
 
 // Import helper from helpers.ts
 import { jsToTransformValue } from './helpers.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// URL-safe base64, HMAC, and URL parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** %base64urlEncode @value - URL-safe base64 (no padding). */
+export const base64urlEncode: VerbFunction = (args, context) => {
+  if (args.length === 0) return nil();
+  const value = toString(args[0]!);
+  if (typeof Buffer !== 'undefined') {
+    return str(Buffer.from(value, 'utf-8').toString('base64url'));
+  }
+  const b64 = base64Encode([args[0]!], context);
+  if (b64.type !== 'string') return nil();
+  return str(b64.value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''));
+};
+
+/** %base64urlDecode @value - decode URL-safe base64. */
+export const base64urlDecode: VerbFunction = (args, context) => {
+  if (args.length === 0) return nil();
+  const value = toString(args[0]!);
+  if (typeof Buffer !== 'undefined') {
+    return str(Buffer.from(value, 'base64url').toString('utf-8'));
+  }
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/');
+  return base64Decode([str(padded)], context);
+};
+
+/** %hmac @message "key" ["algorithm"] - keyed hash (default sha256), hex output. */
+export const hmac: VerbFunction = (args) => {
+  if (args.length < 2) return nil();
+  const message = toString(args[0]!);
+  const key = toString(args[1]!);
+  const alg = args.length >= 3 ? toString(args[2]!).toLowerCase() : 'sha256';
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const crypto = require('crypto');
+    return str(crypto.createHmac(alg, key).update(message, 'utf-8').digest('hex').toLowerCase());
+  } catch {
+    return nil();
+  }
+};
+
+// Build a query object from URLSearchParams with keys sorted for canonical output.
+function sortedQuery(params: URLSearchParams): Record<string, unknown> {
+  const query: Record<string, unknown> = {};
+  for (const key of [...new Set([...params.keys()])].sort()) {
+    query[key] = params.get(key);
+  }
+  return query;
+}
+
+/** %parseUrl @url - parse into {scheme, host, port, path, query, fragment}; query keys sorted. */
+export const parseUrl: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  try {
+    const u = new URL(toString(args[0]!));
+    return obj({
+      scheme: u.protocol.replace(/:$/, ''),
+      host: u.hostname,
+      port: u.port === '' ? null : Number(u.port),
+      path: u.pathname,
+      query: sortedQuery(u.searchParams),
+      fragment: u.hash.replace(/^#/, ''),
+    });
+  } catch {
+    return nil();
+  }
+};
+
+/** %parseQuery @queryString - parse a query string into an object; keys sorted. */
+export const parseQuery: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const raw = toString(args[0]!).replace(/^\?/, '');
+  return obj(sortedQuery(new URLSearchParams(raw)));
+};
+
+/** %buildQuery @object - serialize an object to a query string with keys sorted. */
+export const buildQuery: VerbFunction = (args) => {
+  if (args.length === 0) return nil();
+  const val = args[0]!;
+  if (val.type !== 'object') return nil();
+  const src = val.value as Record<string, unknown>;
+  const params = new URLSearchParams();
+  for (const key of Object.keys(src).sort()) {
+    const v = src[key];
+    if (v === null || v === undefined) continue;
+    params.append(key, toString(jsToTransformValue(v)));
+  }
+  return str(params.toString());
+};
+
+/** %buildUrl @object - inverse of parseUrl; query keys sorted for canonical output. */
+export const buildUrl: VerbFunction = (args, context) => {
+  if (args.length === 0) return nil();
+  const val = args[0]!;
+  if (val.type !== 'object') return nil();
+  const o = val.value as Record<string, unknown>;
+  const get = (k: string): string => {
+    const v = o[k];
+    return v === null || v === undefined ? '' : toString(jsToTransformValue(v));
+  };
+  const scheme = get('scheme');
+  const host = get('host');
+  if (!scheme || !host) return nil();
+  const port = get('port');
+  const path = get('path');
+  const fragment = get('fragment');
+  let url = `${scheme}://${host}`;
+  if (port) url += `:${port}`;
+  url += path.startsWith('/') ? path : path ? `/${path}` : '';
+  const q = o['query'];
+  if (q && typeof q === 'object') {
+    const qStr = buildQuery([{ type: 'object', value: q } as TransformValue], context);
+    if (qStr.type === 'string' && qStr.value) url += `?${qStr.value}`;
+  }
+  if (fragment) url += `#${fragment}`;
+  return str(url);
+};
