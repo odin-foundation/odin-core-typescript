@@ -343,10 +343,58 @@ function augmentWithPresentCompositions(
           result.set(fullPath, { ...typeField, path: fullPath });
         }
       }
+      // Expand the type's array-of-object entries under each present index so
+      // entry-level required markers are enforced (only when present).
+      if (typeDef.arrays) {
+        for (const [arrName, arr] of typeDef.arrays) {
+          const arrayPath = `${path}.${arrName}`;
+          const itemFields = resolveArrayItemFields(ctx, arr);
+          if (itemFields.size === 0) continue;
+          for (const idx of presentArrayIndices(ctx, arrayPath)) {
+            for (const [itemName, itemField] of itemFields) {
+              if (itemName === '_composition') continue;
+              const fullPath = `${arrayPath}[${idx}].${itemName}`;
+              if (!result.has(fullPath)) {
+                result.set(fullPath, { ...itemField, path: fullPath });
+              }
+            }
+          }
+        }
+      }
     }
   }
 
   return result ?? baseFields;
+}
+
+/**
+ * Resolve an array's entry fields: the inline item fields, or the fields of the
+ * type named by `itemTypeRef` (for the `arr[] = @type` form).
+ */
+function resolveArrayItemFields(
+  ctx: ValidationContext,
+  arr: SchemaArray
+): ReadonlyMap<string, SchemaField> {
+  if (arr.itemFields.size > 0) return arr.itemFields;
+  if (arr.itemTypeRef) {
+    const t = lookupType(ctx, arr.itemTypeRef);
+    if (t) return t.fields;
+  }
+  return arr.itemFields;
+}
+
+/**
+ * Distinct array indices present in the document under the given array path.
+ */
+function presentArrayIndices(ctx: ValidationContext, arrayPath: string): number[] {
+  const seen = new Set<number>();
+  const prefix = `${arrayPath}[`;
+  for (const p of ctx.doc.paths()) {
+    if (!p.startsWith(prefix)) continue;
+    const m = p.slice(arrayPath.length).match(/^\[(\d+)\]/);
+    if (m) seen.add(Number(m[1]));
+  }
+  return [...seen].sort((a, b) => a - b);
 }
 
 /**

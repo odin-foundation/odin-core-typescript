@@ -177,9 +177,18 @@ class SchemaParser {
   private finalizeCurrentContext(): void {
     // Finalize type definition
     if (this.currentTypeName && this.currentTypeFields.size > 0) {
+      // Pull array-of-object entry fields (arr[] / arr[].field) out of the flat
+      // field map into a type-level arrays map so they get per-element validation.
+      const newArrays = this.extractTypeArrays(this.currentTypeFields);
+      const existing = this.types.get(this.currentTypeName);
+      const arrays =
+        existing?.arrays && existing.arrays.size > 0
+          ? new Map([...existing.arrays, ...newArrays])
+          : newArrays;
       const typeDef: SchemaType = {
         name: this.currentTypeName,
         fields: this.currentTypeFields,
+        ...(arrays.size > 0 ? { arrays } : {}),
       };
       this.types.set(this.currentTypeName, typeDef);
       this.currentTypeFields = new Map();
@@ -211,6 +220,48 @@ class SchemaParser {
       this.pendingArrayMaxItems = undefined;
       this.pendingArrayUnique = false;
     }
+  }
+
+  /**
+   * Pull array-of-object entry fields out of a type's flat field map. A field
+   * key `arr[]` (whose value is a type reference) becomes an array with an item
+   * type ref; keys `arr[].field` become an array whose item fields are those
+   * fields. Matching keys are removed from the field map.
+   */
+  private extractTypeArrays(fields: Map<string, SchemaField>): Map<string, SchemaArray> {
+    const builders = new Map<string, { itemFields: Map<string, SchemaField>; itemTypeRef?: string }>();
+
+    for (const [key, field] of [...fields]) {
+      const m = key.match(/^([^[\]]+)\[\](?:\.(.+))?$/);
+      if (!m) continue;
+      const arrName = m[1]!;
+      const itemPath = m[2];
+      fields.delete(key);
+
+      let b = builders.get(arrName);
+      if (!b) {
+        b = { itemFields: new Map() };
+        builders.set(arrName, b);
+      }
+
+      if (itemPath === undefined) {
+        // arr[] = @type  -> item fields come from the referenced type
+        const t = field.type as { kind: string; name?: string; targetPath?: string };
+        const ref = t.kind === 'typeRef' ? t.name : t.kind === 'reference' ? t.targetPath : undefined;
+        if (ref) b.itemTypeRef = ref;
+      } else {
+        // arr[].itemPath = field
+        b.itemFields.set(itemPath, { ...field, path: itemPath });
+      }
+    }
+
+    const arrays = new Map<string, SchemaArray>();
+    for (const [name, b] of builders) {
+      const sa: SchemaArray = { path: name, unique: false, itemFields: b.itemFields };
+      if (b.itemTypeRef) sa.itemTypeRef = b.itemTypeRef;
+      arrays.set(name, sa);
+    }
+    return arrays;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

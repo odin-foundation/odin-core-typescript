@@ -72,6 +72,13 @@ export interface SchemaType {
   name: string;
   namespace?: string;
   fields: ReadonlyMap<string, SchemaField>;
+  /**
+   * Array-of-object entry fields declared inside the type, keyed by the array
+   * name (e.g. `producers` for `producers[] = @t` or `producers[].field`).
+   * Mirrors {@link Schema.arrays} so per-element validation works when the type
+   * is reached through a reference.
+   */
+  arrays?: ReadonlyMap<string, SchemaArray>;
 }
 
 /**
@@ -284,6 +291,12 @@ export interface SchemaArray {
    * Item field definitions.
    */
   itemFields: ReadonlyMap<string, SchemaField>;
+
+  /**
+   * For an `arr[] = @type` declaration the entry fields come from a referenced
+   * type, resolved at validation time. Empty `itemFields` plus this ref.
+   */
+  itemTypeRef?: string;
 
   /**
    * Column order for tabular syntax.
