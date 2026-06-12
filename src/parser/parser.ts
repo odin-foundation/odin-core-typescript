@@ -65,6 +65,20 @@ const FLAG_ONLY_DIRECTIVES = new Set([
 ]);
 
 /**
+ * Field/value modifier directives. These attach to the value (and through it
+ * to a mapping), never to a verb argument, so verb-argument directive parsing
+ * must stop at them and let them bubble up to the assignment level.
+ */
+const FIELD_MODIFIER_DIRECTIVES = new Set([
+  'attr',
+  'required',
+  'confidential',
+  'deprecated',
+  'redacted',
+  'critical',
+]);
+
+/**
  * ODIN Parser.
  */
 export class Parser {
@@ -1401,8 +1415,10 @@ export class Parser {
       );
     }
 
-    // Parse trailing directives for this argument (e.g., @_line :pos 3 :len 8)
-    const trailing = this.parseTrailingDirectives();
+    // Parse trailing directives for this argument (e.g., @_line :pos 3 :len 8).
+    // Field modifiers (:attr, :required, ...) belong to the mapping, not the
+    // argument, so stop at them and let them bubble up.
+    const trailing = this.parseTrailingDirectives(true);
     const directives =
       value.directives && trailing
         ? [...value.directives, ...trailing]
@@ -1674,7 +1690,7 @@ export class Parser {
    *
    * @returns Array of directives, or undefined if none found
    */
-  private parseTrailingDirectives(): OdinDirective[] | undefined {
+  private parseTrailingDirectives(stopAtFieldModifiers: boolean = false): OdinDirective[] | undefined {
     const directives: OdinDirective[] = [];
 
     while (!this.isAtEnd()) {
@@ -1708,7 +1724,9 @@ export class Parser {
         break;
       }
 
-      // Consume the colon
+      // Tentatively consume the colon + name so a field-modifier boundary can
+      // be honored without committing (the modifier belongs to the value).
+      const savedPos = this.pos;
       this.advance();
 
       // Skip whitespace after colon (though typically there isn't any)
@@ -1726,6 +1744,12 @@ export class Parser {
         );
       }
       const name = this.getTokenVal(nameToken);
+
+      if (stopAtFieldModifiers && FIELD_MODIFIER_DIRECTIVES.has(name)) {
+        // Leave the field modifier for the value/assignment level.
+        this.pos = savedPos;
+        break;
+      }
       this.advance();
 
       // Skip whitespace

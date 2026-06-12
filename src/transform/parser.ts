@@ -673,22 +673,22 @@ class TransformParser {
     // Handle first-class verb expressions (parsed by ODIN parser)
     if (value.type === 'verb') {
       const expr = this.odinVerbToValueExpression(value);
-      const mapping: FieldMapping = {
-        target: targetField,
-        value: expr,
-        modifiers: [...formattingModifiers],
+      const modifiers: Modifier[] = [...formattingModifiers];
+      let isConfidential = false;
+      const add = (name: string, val?: string | number) => {
+        if (!modifiers.some((m) => m.name === name)) modifiers.push({ name, value: val });
+        if (name === 'confidential') isConfidential = true;
       };
-      // Handle modifiers from the verb value if present
-      if (value.modifiers?.confidential) {
-        mapping.confidential = true;
-        mapping.modifiers.push({ name: 'confidential' });
+      // Trailing directives attached to the verb value (e.g. :attr, :required).
+      if (value.directives) {
+        for (const directive of value.directives) add(directive.name, directive.value);
       }
-      if (value.modifiers?.required) {
-        mapping.modifiers.push({ name: 'required' });
-      }
-      if (value.modifiers?.deprecated) {
-        mapping.modifiers.push({ name: 'deprecated' });
-      }
+      // Prefix modifiers on the verb value (! / - / *).
+      if (value.modifiers?.confidential) add('confidential');
+      if (value.modifiers?.required) add('required');
+      if (value.modifiers?.deprecated) add('deprecated');
+      const mapping: FieldMapping = { target: targetField, value: expr, modifiers };
+      if (isConfidential) mapping.confidential = true;
       return mapping;
     }
 
