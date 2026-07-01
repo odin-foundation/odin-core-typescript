@@ -63,6 +63,15 @@ export const TransformErrorCodes = {
   /** Invalid %expr formula - cannot compile to a verb tree */
   T015_INVALID_EXPRESSION: 'T015',
 
+  /** Transform fuel budget exceeded */
+  T016_TRANSFORM_BUDGET_EXCEEDED: 'T016',
+
+  /** Transform wall-clock timeout exceeded */
+  T017_TRANSFORM_TIMEOUT_EXCEEDED: 'T017',
+
+  /** Expression evaluation depth exceeded */
+  T018_EXPRESSION_DEPTH_EXCEEDED: 'T018',
+
   // Extended codes (implementation-specific)
 
   /** Configuration error - transform document is misconfigured */
@@ -113,6 +122,17 @@ export class CodedTransformError extends Error {
   constructor(public readonly transformError: TransformError) {
     super(transformError.message);
     this.name = 'CodedTransformError';
+  }
+}
+
+/**
+ * Execution guard abort (fuel, timeout, or depth). Not downgraded by the onError
+ * policy; the execute boundary surfaces `.transformError` as a failed result.
+ */
+export class TransformAbortError extends Error {
+  constructor(public readonly transformError: TransformError) {
+    super(transformError.message);
+    this.name = 'TransformAbortError';
   }
 }
 
@@ -372,6 +392,36 @@ export function positionOverflowWarning(
   };
   if (field !== undefined) warning.field = field;
   return warning;
+}
+
+/**
+ * Create a T016 Transform Budget Exceeded error.
+ */
+export function budgetExceededError(limit: number): TransformError {
+  return {
+    code: TransformErrorCodes.T016_TRANSFORM_BUDGET_EXCEEDED,
+    message: `Transform fuel budget exceeded (limit ${limit})`,
+  };
+}
+
+/**
+ * Create a T017 Transform Timeout Exceeded error.
+ */
+export function timeoutExceededError(limitMs: number): TransformError {
+  return {
+    code: TransformErrorCodes.T017_TRANSFORM_TIMEOUT_EXCEEDED,
+    message: `Transform timeout exceeded (limit ${limitMs}ms)`,
+  };
+}
+
+/**
+ * Create a T018 Expression Depth Exceeded error.
+ */
+export function expressionDepthExceededError(limit: number): TransformError {
+  return {
+    code: TransformErrorCodes.T018_EXPRESSION_DEPTH_EXCEEDED,
+    message: `Expression evaluation depth exceeded (limit ${limit})`,
+  };
 }
 
 /**

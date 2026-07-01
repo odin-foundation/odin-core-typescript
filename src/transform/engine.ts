@@ -42,6 +42,10 @@ import {
   nestedInterpolationError,
   TypeValidationError,
   CodedTransformError,
+  TransformAbortError,
+  budgetExceededError,
+  timeoutExceededError,
+  expressionDepthExceededError,
   sourcePathNotFoundError,
   loopSourceNotArrayError,
   isModifierCompatible,
@@ -98,6 +102,46 @@ const LAZY_VERBS = new Set([
   'cond',
   'switch',
 ]);
+
+// Verbs whose cost grows with an array argument. Charged proportional to the
+// array width so large-array work cannot escape the fuel budget.
+const SORT_VERBS = new Set(['sort']);
+const WIDTH_VERBS = new Set([
+  'distinct',
+  'groupBy',
+  'keyBy',
+  'countBy',
+  'reduce',
+  'sum',
+  'avg',
+  'min',
+  'max',
+  'count',
+  'sumIf',
+  'avgIf',
+  'countIf',
+  'union',
+  'intersection',
+  'difference',
+  'symmetricDifference',
+  'map',
+  'filter',
+  'window',
+  'explode',
+  'flatten',
+  'reverse',
+]);
+
+// Read the wall clock once per this many charged units.
+const CLOCK_CHECK_INTERVAL = 1024;
+
+// Width of the first array-typed argument, or 0 if none.
+function firstArrayWidth(args: TransformValue[]): number {
+  for (const arg of args) {
+    if (arg && arg.type === 'array') return arg.items.length;
+  }
+  return 0;
+}
 
 const verbArityCache = new Map<string, { arity: number; minArity: number }>();
 function resolveVerbArity(verb: string): { arity: number; minArity: number } {
@@ -317,11 +361,21 @@ class TransformEngine {
   private errors: TransformError[] = [];
   private warnings: TransformWarning[] = [];
 
+  // Execution guard state. Fuel/timeout charge only when their cap is > 0.
+  private readonly fuelCap = SECURITY_LIMITS.MAX_TRANSFORM_FUEL;
+  private readonly timeoutMs = SECURITY_LIMITS.TRANSFORM_TIMEOUT_MS;
+  private readonly maxExprDepth = SECURITY_LIMITS.MAX_EXPRESSION_DEPTH;
+  private fuelUsed = 0;
+  private exprDepth = 0;
+  private opsSinceClock = 0;
+  private startTime = 0;
+
   constructor(transform: OdinTransform, options?: TransformOptions) {
     this.transform = transform;
     this.verbRegistry = options?.verbRegistry ?? defaultVerbRegistry;
     // strictTypes can be set via options or via transform header
     this.strictTypes = options?.strictTypes ?? this.transform.strictTypes ?? false;
+    if (this.timeoutMs > 0) this.startTime = Date.now();
 
     if (options?.importResolver && this.transform.imports.length > 0) {
       this.resolveImports(options.importResolver);
@@ -433,22 +487,27 @@ class TransformEngine {
     const passes = this.transform.passes ?? [];
     const hasMultiPass = passes.length > 0;
 
-    if (hasMultiPass) {
-      const passOrder = [...passes, 0];
-      let isFirstPass = true;
+    try {
+      if (hasMultiPass) {
+        const passOrder = [...passes, 0];
+        let isFirstPass = true;
 
-      for (const passNum of passOrder) {
-        if (!isFirstPass) {
-          this.resetNonPersistAccumulators(context);
+        for (const passNum of passOrder) {
+          if (!isFirstPass) {
+            this.resetNonPersistAccumulators(context);
+          }
+          isFirstPass = false;
+
+          const passSegments = this.transform.segments.filter((s) => (s.pass ?? 0) === passNum);
+
+          this.processSegmentList(passSegments, context, output);
         }
-        isFirstPass = false;
-
-        const passSegments = this.transform.segments.filter((s) => (s.pass ?? 0) === passNum);
-
-        this.processSegmentList(passSegments, context, output);
+      } else {
+        this.processSegmentList(this.transform.segments, context, output);
       }
-    } else {
-      this.processSegmentList(this.transform.segments, context, output);
+    } catch (err) {
+      if (err instanceof TransformAbortError) return this.abortResult(err, output);
+      throw err;
     }
 
     // Merge verb-level errors (T011, etc.) into engine errors
@@ -469,6 +528,19 @@ class TransformEngine {
       success: this.errors.length === 0,
       output,
       formatted,
+      errors: this.errors,
+      warnings: this.warnings,
+    };
+  }
+
+  // Surface a guard abort as a failed result; the abort is never thrown past
+  // the execute boundary.
+  private abortResult(err: TransformAbortError, output: Record<string, unknown>): TransformResult {
+    this.errors.push(err.transformError);
+    return {
+      success: false,
+      output,
+      formatted: '',
       errors: this.errors,
       warnings: this.warnings,
     };
@@ -535,6 +607,7 @@ class TransformEngine {
       );
     }
 
+    try {
     for (let recordIndex = 0; recordIndex < maxRecords; recordIndex++) {
       const record = input.records[recordIndex]!;
 
@@ -596,6 +669,10 @@ class TransformEngine {
           : segment.path;
         mergeSegmentOutput(output, segmentPath, recordOutput, setNestedValue);
       }
+    }
+    } catch (err) {
+      if (err instanceof TransformAbortError) return this.abortResult(err, output);
+      throw err;
     }
 
     // Apply array accumulators to output
@@ -771,6 +848,7 @@ class TransformEngine {
       try {
         this.iterateLoops(loopDirectives, 0, context, segment, firstFrom, counterName, results);
       } catch (err) {
+        if (err instanceof TransformAbortError) throw err;
         if (err instanceof CodedTransformError) {
           const onError = this.transform.target.onError ?? 'fail';
           if (onError === 'fail') {
@@ -865,6 +943,7 @@ class TransformEngine {
         (e, ctx) => this.evaluateExpression(e, ctx)
       );
     } catch (err) {
+      if (err instanceof TransformAbortError) throw err;
       if (err instanceof NestedInterpolationError) {
         this.errors.push(nestedInterpolationError(err.expr, segmentPath));
         return '';
@@ -1145,7 +1224,8 @@ class TransformEngine {
         output[mapping.target] = value;
       }
     } catch (err) {
-      // Re-throw TypeValidationError for strict type checking
+      // Guard aborts and strict type errors are not downgraded by onError.
+      if (err instanceof TransformAbortError) throw err;
       if (err instanceof TypeValidationError) {
         throw err;
       }
@@ -1292,7 +1372,56 @@ class TransformEngine {
     }
   }
 
+  // Guard boundary: charge one unit of fuel, enforce depth, and batch the
+  // wall-clock check before delegating to the evaluator. All evaluation paths
+  // funnel through here, so charging stays concentrated at this single point.
   private evaluateExpression(expr: ValueExpression, context: TransformContext): TransformValue {
+    if (++this.exprDepth > this.maxExprDepth) {
+      this.exprDepth--;
+      throw new TransformAbortError(expressionDepthExceededError(this.maxExprDepth));
+    }
+    this.charge(1);
+    try {
+      return this.evaluateExpressionInner(expr, context);
+    } finally {
+      this.exprDepth--;
+    }
+  }
+
+  // Charge fuel and, at a coarse interval, the wall clock. Both are no-ops
+  // unless their cap is set (> 0), so unbounded transforms pay nothing.
+  private charge(units: number): void {
+    if (this.fuelCap > 0) {
+      this.fuelUsed += units;
+      if (this.fuelUsed > this.fuelCap) {
+        throw new TransformAbortError(budgetExceededError(this.fuelCap));
+      }
+    }
+    if (this.timeoutMs > 0) {
+      this.opsSinceClock += units;
+      if (this.opsSinceClock >= CLOCK_CHECK_INTERVAL) {
+        this.opsSinceClock = 0;
+        if (Date.now() - this.startTime > this.timeoutMs) {
+          throw new TransformAbortError(timeoutExceededError(this.timeoutMs));
+        }
+      }
+    }
+  }
+
+  // Charge width for a verb doing O(n)/O(n log n) work over an array argument,
+  // so large-array work cannot escape the budget at a flat unit.
+  private chargeVerbWidth(verb: string, args: TransformValue[]): void {
+    if (this.fuelCap <= 0 && this.timeoutMs <= 0) return;
+    const n = firstArrayWidth(args);
+    if (n <= 0) return;
+    if (SORT_VERBS.has(verb)) {
+      this.charge(n * Math.ceil(Math.log2(Math.max(n, 2))));
+    } else if (WIDTH_VERBS.has(verb)) {
+      this.charge(n);
+    }
+  }
+
+  private evaluateExpressionInner(expr: ValueExpression, context: TransformContext): TransformValue {
     switch (expr.type) {
       case 'literal':
         // Process interpolation for string literals containing ${...}
@@ -1362,6 +1491,7 @@ class TransformEngine {
         }
 
         const args = expr.args.map((arg) => this.evaluateExpression(arg, context));
+        this.chargeVerbWidth(expr.verb, args);
 
         // Type validation (if strict mode enabled)
         if (this.strictTypes) {
