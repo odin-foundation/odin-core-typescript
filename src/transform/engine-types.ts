@@ -19,6 +19,12 @@ export interface TransformOptions {
    * before execution. Returning undefined leaves that import unresolved.
    */
   importResolver?: (path: string) => string | undefined;
+  /** Per-call fuel budget; overrides the global limit. 0 means unbounded. */
+  maxTransformFuel?: number;
+  /** Per-call wall-clock timeout in ms; overrides the global limit. 0 means unbounded. */
+  transformTimeoutMs?: number;
+  /** Per-call expression-depth cap; overrides the global limit. */
+  maxExpressionDepth?: number;
 }
 
 /**

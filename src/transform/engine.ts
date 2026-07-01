@@ -362,9 +362,10 @@ class TransformEngine {
   private warnings: TransformWarning[] = [];
 
   // Execution guard state. Fuel/timeout charge only when their cap is > 0.
-  private readonly fuelCap = SECURITY_LIMITS.MAX_TRANSFORM_FUEL;
-  private readonly timeoutMs = SECURITY_LIMITS.TRANSFORM_TIMEOUT_MS;
-  private readonly maxExprDepth = SECURITY_LIMITS.MAX_EXPRESSION_DEPTH;
+  // A per-call option overrides the global limit; unset falls back to it.
+  private readonly fuelCap: number;
+  private readonly timeoutMs: number;
+  private readonly maxExprDepth: number;
   private fuelUsed = 0;
   private exprDepth = 0;
   private opsSinceClock = 0;
@@ -375,6 +376,9 @@ class TransformEngine {
     this.verbRegistry = options?.verbRegistry ?? defaultVerbRegistry;
     // strictTypes can be set via options or via transform header
     this.strictTypes = options?.strictTypes ?? this.transform.strictTypes ?? false;
+    this.fuelCap = options?.maxTransformFuel ?? SECURITY_LIMITS.MAX_TRANSFORM_FUEL;
+    this.timeoutMs = options?.transformTimeoutMs ?? SECURITY_LIMITS.TRANSFORM_TIMEOUT_MS;
+    this.maxExprDepth = options?.maxExpressionDepth ?? SECURITY_LIMITS.MAX_EXPRESSION_DEPTH;
     if (this.timeoutMs > 0) this.startTime = Date.now();
 
     if (options?.importResolver && this.transform.imports.length > 0) {

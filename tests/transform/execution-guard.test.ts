@@ -7,6 +7,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { parseTransform, executeTransform } from '../../src/transform/index.js';
+import type { TransformOptions } from '../../src/transform/index.js';
 import { SECURITY_LIMITS } from '../../src/utils/security-limits.js';
 
 const HEADER = '{$}\nodin = "1.0.0"\ntransform = "1.0.0"\ndirection = "json->json"\n\n';
@@ -18,8 +19,13 @@ function headerWith(onError: string): string {
   );
 }
 
-function run(body: string, source: Record<string, unknown> = {}, head = HEADER) {
-  return executeTransform(parseTransform(head + body), source);
+function run(
+  body: string,
+  source: Record<string, unknown> = {},
+  head = HEADER,
+  opts?: TransformOptions
+) {
+  return executeTransform(parseTransform(head + body), source, opts);
 }
 
 // Chain of n nested unary verbs, evaluated one level per node.
@@ -115,5 +121,41 @@ describe('non-swallowable abort', () => {
     expect(r.success).toBe(false);
     expect(r.errors.some((e) => e.code === 'T016')).toBe(true);
     expect(r.warnings.some((w) => w.code === 'T016')).toBe(false);
+  });
+});
+
+describe('per-call overrides', () => {
+  const big = () => Array.from({ length: 200 }, (_, i) => 200 - i);
+
+  it('applies a per-call fuel budget when no global limit is set', () => {
+    const r = run('{out}\nr = %sort @big', { big: big() }, HEADER, { maxTransformFuel: 50 });
+    expect(r.success).toBe(false);
+    expect(r.errors.some((e) => e.code === 'T016')).toBe(true);
+  });
+
+  it('overrides the global fuel limit for this call', () => {
+    SECURITY_LIMITS.MAX_TRANSFORM_FUEL = 50;
+    const r = run('{out}\nr = %sort @big', { big: big() }, HEADER, { maxTransformFuel: 1_000_000 });
+    expect(r.success).toBe(true);
+  });
+
+  it('a per-call 0 opts a single call out of a global fuel cap', () => {
+    SECURITY_LIMITS.MAX_TRANSFORM_FUEL = 50;
+    const r = run('{out}\nr = %sort @big', { big: big() }, HEADER, { maxTransformFuel: 0 });
+    expect(r.success).toBe(true);
+  });
+
+  it('applies a per-call expression-depth cap', () => {
+    const r = run(nestAbs(30), {}, HEADER, { maxExpressionDepth: 8 });
+    expect(r.success).toBe(false);
+    expect(r.errors.some((e) => e.code === 'T018')).toBe(true);
+  });
+
+  it('applies a per-call timeout', () => {
+    let clock = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => (clock += 10_000));
+    const r = run('{out}\nr = %sort @big', { big: big() }, HEADER, { transformTimeoutMs: 100 });
+    expect(r.success).toBe(false);
+    expect(r.errors.some((e) => e.code === 'T017')).toBe(true);
   });
 });
